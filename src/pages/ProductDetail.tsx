@@ -1,0 +1,205 @@
+import React, { useState, useEffect } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Product } from '@/types';
+import { Button } from '@/components/ui/button';
+import { useStore } from '@/lib/store';
+import { Heart, ShoppingBag, Star, ShieldCheck, Truck, RefreshCw, ChevronLeft, ChevronRight, MapPin, Loader2 } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { formatPrice } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { PLACEHOLDER_IMAGE } from '@/lib/constants';
+
+const ProductDetail = () => {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const { addToCart, toggleWishlist, wishlist, products, fetchSingleProduct } = useStore();
+  const [activeImage, setActiveImage] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [productDetail, setProductDetail] = useState<Product | null>(null);
+
+  useEffect(() => {
+    const fetchProduct = async () => {
+      if (!id) return;
+      try {
+        setLoading(true);
+        const data = await fetchSingleProduct(id);
+        if (data) setProductDetail(data);
+      } catch (err) {
+        console.error('Error fetching product:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProduct();
+  }, [id]);
+
+  // Fallback to store if available while loading or if fetch fails
+  const product = productDetail || products.find(p => p.id === id);
+
+  if (!product && loading) {
+    return (
+      <div className="container mx-auto px-4 py-40 flex flex-col items-center justify-center space-y-4">
+        <Loader2 className="w-10 h-10 animate-spin text-primary" />
+        <p className="text-sm font-black uppercase tracking-widest text-muted-foreground">Finding Product...</p>
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="container mx-auto px-4 py-40 text-center">
+        <h2 className="text-2xl font-black uppercase">Product not found</h2>
+        <Button variant="link" onClick={() => navigate('/')}>Return Home</Button>
+      </div>
+    );
+  }
+
+  const isWishlisted = wishlist.includes(product.id);
+
+  return (
+    <div className="container mx-auto px-4 py-6 max-w-5xl">
+      <Button 
+        variant="ghost" 
+        size="sm"
+        onClick={() => navigate(-1)} 
+        className="mb-4 hover:bg-primary/10 rounded-xl font-bold text-xs"
+      >
+        <ChevronLeft className="mr-1 w-4 h-4" /> Back
+      </Button>
+
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-8 lg:gap-16">
+        {/* Images Section */}
+        <div className="space-y-4 md:col-span-4 lg:col-span-5 max-w-[400px] mx-auto w-full">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.98 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="aspect-square rounded-2xl overflow-hidden glass relative group border border-primary/10 shadow-xl shadow-primary/5"
+          >
+            <img 
+              src={product.images?.[activeImage] || PLACEHOLDER_IMAGE} 
+              alt={product.name}
+              className="w-full h-full object-cover"
+            />
+          </motion.div>
+          
+          <div className="flex gap-1.5 overflow-x-auto pb-2 no-scrollbar justify-center">
+            {(product.images || []).map((img, idx) => (
+              <button
+                key={idx}
+                onClick={() => setActiveImage(idx)}
+                className={cn(
+                   "flex-shrink-0 w-10 h-10 rounded-lg overflow-hidden glass border-2 transition-all",
+                   activeImage === idx ? "border-primary scale-105 shadow-md shadow-primary/10" : "border-transparent opacity-40 hover:opacity-100"
+                )}
+              >
+                <img src={img} alt={`${product.name} ${idx}`} className="w-full h-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Info Section */}
+        <div className="flex flex-col space-y-4 md:col-span-8 lg:col-span-7">
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary" className="bg-primary/10 text-primary border-none rounded-lg px-2 py-0.5 text-[10px] font-black uppercase">
+                {product.category}
+              </Badge>
+              {product.tags?.map(tag => (
+                <Badge key={tag} className="bg-white/5 text-foreground/70 border-none rounded-lg px-2 py-0.5 text-[10px] tracking-widest font-bold uppercase">
+                  {tag}
+                </Badge>
+              ))}
+            </div>
+            <h1 className="text-3xl font-black tracking-tight leading-tight uppercase">
+              {product.name}
+            </h1>
+            <div className="flex items-center gap-2">
+              <div className="flex items-center text-secondary">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <Star key={i} className={cn("w-3.5 h-3.5", i <= Math.round(product.rating || 4.5) ? "fill-current" : "opacity-20")} />
+                ))}
+              </div>
+              <span className="text-[10px] font-bold text-muted-foreground uppercase opacity-60">
+                {product.rating || (4.5).toFixed(1)} ({product.sold_count || 0} units sold)
+              </span>
+            </div>
+            {product.stock !== undefined && (
+              <div className="flex items-center gap-2 mt-1">
+                <div className={cn(
+                  "px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest",
+                  product.stock > 10 ? "bg-green-500/10 text-green-500" : 
+                  product.stock > 0 ? "bg-orange-500/10 text-orange-500" : 
+                  "bg-red-500/10 text-red-500"
+                )}>
+                  {product.stock > 0 ? `Stock Available: ${product.stock}` : 'Out of Stock'}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-baseline gap-3">
+             <span className="text-4xl font-black text-foreground">{formatPrice(product.price)}</span>
+             <span className="text-sm text-muted-foreground/50 line-through font-bold">
+               {formatPrice(product.price * 1.2)}
+             </span>
+          </div>
+
+          <Separator className="bg-white/5" />
+
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            {product.description}
+          </p>
+
+          <div className="flex gap-2 py-4">
+            <Button 
+              size="lg" 
+              className="h-14 rounded-2xl text-sm font-black uppercase shadow-lg shadow-primary/20 flex-[2]"
+              onClick={() => addToCart(product)}
+            >
+              <ShoppingBag className="mr-2 w-5 h-5" /> Add to Order
+            </Button>
+            <Button 
+              size="icon" 
+              variant="outline" 
+              className={cn(
+                "h-14 w-14 rounded-2xl glass transition-all",
+                isWishlisted && "text-red-500 bg-red-500/10 border-red-500/20"
+              )}
+              onClick={() => toggleWishlist(product.id)}
+            >
+              <Heart className={cn("w-6 h-6", isWishlisted && "fill-current")} /> 
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 pb-8">
+            <div className="flex items-center gap-3 p-3 glass rounded-2xl border border-white/5">
+              <div className="w-8 h-8 rounded-lg bg-green-500/10 text-green-500 flex items-center justify-center shrink-0">
+                <Truck className="w-4 h-4" />
+              </div>
+              <div className="text-[10px]">
+                <p className="font-bold uppercase tracking-tight">DayDeals Fast Delivery</p>
+                <p className="text-muted-foreground opacity-60">Addis Ababa: 1-3 Days</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-4 rounded-2xl bg-secondary/5 border border-secondary/10">
+             <div className="flex items-center gap-2 mb-2">
+                <ShieldCheck className="w-4 h-4 text-secondary" />
+                <span className="text-[10px] font-black uppercase tracking-tight">DayDeals Verified Item</span>
+             </div>
+             <p className="text-[10px] text-muted-foreground leading-tight">
+               Every product at Day Deals is sourced directly from trusted wholesalers and verified creators. 100% genuine quality.
+             </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default ProductDetail;
