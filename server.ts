@@ -15,6 +15,10 @@ const pool = new Pool({
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
+
+pool.on('error', (err) => {
+  console.error('Unexpected error on idle client', err);
+});
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 async function initializeDatabase() {
@@ -109,16 +113,30 @@ async function initializeDatabase() {
 }
 
 async function startServer() {
-  await initializeDatabase();
   const app = express();
   const PORT = 3000;
+
+  console.log("Starting server in mode:", process.env.NODE_ENV);
+  console.log("Current working directory:", process.cwd());
 
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+  // API logging middleware
+  app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url}`);
+    next();
+  });
+
   // API routes
-  app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+  app.get("/api/health", async (req, res) => {
+    try {
+      const dbCheck = await pool.query("SELECT 1");
+      res.json({ status: "ok", db: "connected", timestamp: new Date().toISOString() });
+    } catch (err) {
+      console.error("Health check DB error:", err);
+      res.status(500).json({ status: "error", message: "Database connection failed", error: String(err) });
+    }
   });
 
   // Auth Middleware
@@ -439,13 +457,23 @@ async function startServer() {
     const client = await pool.connect();
     try {
       console.log('Starting order creation for user:', (req as any).user.id);
-      await client.query('BEGIN');
+      
       const userId = (req as any).user.id;
       const { items, total, shippingAddress } = req.body;
       
+      if (!items || !Array.isArray(items) || items.length === 0) {
+        return res.status(400).json({ error: 'Order must contain items' });
+      }
+      
+      if (!shippingAddress || typeof shippingAddress !== 'object') {
+        return res.status(400).json({ error: 'Valid shipping address is required' });
+      }
+
+      await client.query('BEGIN');
+      
       const orderRes = await client.query(
         'INSERT INTO orders (user_id, total, shipping_address, shipping_phone, shipping_city) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-        [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone, shippingAddress.city]
+        [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || 'N/A', shippingAddress.city || 'N/A']
       );
       const orderId = orderRes.rows[0].id;
       console.log('Order created with ID:', orderId);
@@ -564,15 +592,30 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    console.log("Production mode: Serving static files from:", distPath);
+    app.use('/assets', express.static(path.join(distPath, 'assets'), {
+      fallthrough: false, // Don't fall through to SPA fallback for /assets
+      maxAge: '1d'
+    }));
     app.use(express.static(distPath));
-    // Note: Express v4 uses '*'
+
     app.get('*', (req, res) => {
+      // If it looks like a file request but wasn't caught by express.static, it's missing
+      if (req.url.includes('.') || req.url.startsWith('/assets/')) {
+        console.error("File not found:", req.url);
+        return res.status(404).send('Not found');
+      }
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  // Start listening immediately
+  app.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    // Initialize DB after starting server
+    initializeDatabase().catch(err => {
+      console.error("Delayed database initialization failed:", err);
+    });
   });
 }
 

@@ -68,6 +68,8 @@ const Checkout = () => {
       };
 
       const token = localStorage.getItem('token');
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
 
       const res = await fetch('/api/orders', {
         method: 'POST',
@@ -76,7 +78,10 @@ const Checkout = () => {
           ...(token ? { 'Authorization': `Bearer ${token}` } : {})
         },
         body: JSON.stringify(orderData),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ error: 'Order taking failed' }));

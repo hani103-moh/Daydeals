@@ -51,12 +51,25 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setOrdersCount(activeOrders.length);
   }, [orders]);
 
+  const fetchWithTimeout = async (url: string, options: any = {}, timeout = 15000) => {
+    const controller = new AbortController();
+    const id = setTimeout(() => controller.abort(), timeout);
+    try {
+      const response = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(id);
+      return response;
+    } catch (error) {
+      clearTimeout(id);
+      throw error;
+    }
+  };
+
   const fetchOrders = async () => {
     const token = localStorage.getItem('token');
     console.log('Fetching orders...');
     if (!token) return;
     try {
-      const res = await fetch('/api/orders', {
+      const res = await fetchWithTimeout('/api/orders', {
         headers: { 'Authorization': `Bearer ${token}` }
       });
       if (res.ok) {
@@ -75,7 +88,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const token = localStorage.getItem('token');
     if (token) {
       try {
-        const res = await fetch('/api/auth/me', {
+        const res = await fetchWithTimeout('/api/auth/me', {
           headers: { 'Authorization': `Bearer ${token}` }
         });
         if (res.ok) {
@@ -100,7 +113,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const fetchCategories = async () => {
     try {
       console.log('Fetching categories...');
-      const res = await fetch('/api/categories');
+      const res = await fetchWithTimeout('/api/categories');
       if (res.ok) {
         const data = await res.json();
         console.log('Categories fetched:', data);
@@ -116,7 +129,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const fetchProducts = async (full: boolean = false) => {
     try {
       console.log('Fetching products...', full ? '(full)' : '');
-      const res = await fetch(`/api/products${full ? '?full=true' : ''}`);
+      const res = await fetchWithTimeout(`/api/products${full ? '?full=true' : ''}`);
       if (res.ok) {
         const data = await res.json();
         console.log('Products fetched:', data.length);
@@ -126,6 +139,11 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       }
     } catch (err) {
       console.error('Fetch products error:', err);
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.warn('Network timeout fetching products');
+      } else if (err instanceof TypeError && err.message === 'Load failed') {
+        console.warn('Network error: Is the server running on port 3000?');
+      }
     } finally {
       setDbLoading(false);
     }
