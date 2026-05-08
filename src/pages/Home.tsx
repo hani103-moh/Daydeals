@@ -108,11 +108,11 @@ const Home = () => {
             />
           </div>
           <DropdownMenu>
-            <DropdownMenuTrigger render={
+            <DropdownMenuTrigger asChild>
               <Button variant="outline" size="icon" className="h-10 w-10 rounded-xl glass border-white/10">
                 <SlidersHorizontal className="w-4 h-4" />
               </Button>
-            } />
+            </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-48 rounded-xl glass">
               <DropdownMenuItem onClick={() => setSortBy('newest')}>Newest First</DropdownMenuItem>
               <DropdownMenuItem onClick={() => setSortBy('price-low')}>Price: Low to High</DropdownMenuItem>

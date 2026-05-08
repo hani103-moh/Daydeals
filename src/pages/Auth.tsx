@@ -144,6 +144,26 @@ const Auth = () => {
           </button>
         </div>
 
+        <div className="flex justify-center pt-2">
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            className="text-[8px] font-black uppercase tracking-[0.2em] opacity-40 hover:opacity-100"
+            onClick={async () => {
+              try {
+                const res = await fetch('/api/health');
+                const data = await res.json();
+                if (data.status === 'ok') toast.success('Server connection: OK');
+                else toast.error('Server connection: ' + (data.message || 'Error'));
+              } catch (e) {
+                toast.error('Cannot reach server. Please refresh.');
+              }
+            }}
+          >
+            Check Connection
+          </Button>
+        </div>
+
         <p className="text-[10px] text-muted-foreground uppercase tracking-widest font-black opacity-50 px-4">
           By continuing, you agree to DayDeals Terms of Service & Privacy Policy
         </p>

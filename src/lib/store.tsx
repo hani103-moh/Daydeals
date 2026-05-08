@@ -189,7 +189,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const signUpWithEmail = async (email: string, pass: string, name: string) => {
     try {
-      const res = await fetch('/api/auth/register', {
+      console.log('Sending registration request...');
+      const res = await fetchWithTimeout('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password: pass, displayName: name })
@@ -208,6 +209,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setWishlist([]);
       toast.success('Registration successful');
     } catch (err: any) {
+      console.error('Registration error:', err);
       toast.error(err.message);
       throw err;
     }
@@ -215,14 +217,19 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
 
   const signInWithEmail = async (email: string, pass: string) => {
     try {
-      const res = await fetch('/api/auth/login', {
+      console.log('Sending login request...');
+      const res = await fetchWithTimeout('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password: pass })
       });
       if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || 'Login failed');
+        let errStr = 'Login failed';
+        try {
+          const err = await res.json();
+          errStr = err.error || errStr;
+        } catch(e) {}
+        throw new Error(errStr);
       }
       const data = await res.json();
       localStorage.setItem('token', data.token);
@@ -230,6 +237,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setWishlist(data.user.wishlist || []);
       toast.success('Login successful');
     } catch (err: any) {
+      console.error('Login error:', err);
       toast.error(err.message);
       throw err;
     }

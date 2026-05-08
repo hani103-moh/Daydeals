@@ -44,7 +44,7 @@ async function initializeDatabase() {
       CREATE TABLE IF NOT EXISTS categories (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
-        image TEXT,
+        icon VARCHAR(100),
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
@@ -155,7 +155,7 @@ async function startServer() {
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      console.log("Register payload received:", req.body);
+      console.log("Registering user:", req.body.email);
       const { email, password, displayName } = req.body;
       
       if (!email || !password || !displayName) {
@@ -172,13 +172,14 @@ async function startServer() {
       const user = result.rows[0];
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET);
       
+      console.log("Registration successful for:", email);
       res.json({ token, user: { uid: user.id, email: user.email, displayName: user.display_name, role: user.role } });
     } catch (err: any) {
       console.error("Register error:", err);
       if (err.code === '23505') { // unique violation
         res.status(400).json({ error: 'Email already exists' });
       } else {
-        res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: 'Internal server error: ' + err.message });
       }
     }
   });
@@ -186,19 +187,30 @@ async function startServer() {
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = req.body;
+      console.log("Login attempt for:", email);
+
       const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
       const user = result.rows[0];
 
-      if (!user) return res.status(400).json({ error: 'Invalid email or password' });
+      if (!user) {
+        console.warn("User not found:", email);
+        return res.status(400).json({ error: 'Invalid email or password' });
+      }
 
+      console.log("User found, comparing passwords...");
       const validPassword = await bcrypt.compare(password, user.password_hash);
-      if (!validPassword) return res.status(400).json({ error: 'Invalid email or password' });
+      if (!validPassword) {
+        console.warn("Invalid password for:", email);
+        return res.status(400).json({ error: 'Invalid email or password' });
+      }
 
+      console.log("Password valid, signing token...");
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET);
       
       res.json({ token, user: { uid: user.id, email: user.email, displayName: user.display_name, role: user.role, photoURL: user.photo_url, wishlist: [] } });
-    } catch (err) {
-      res.status(500).json({ error: 'Internal server error' });
+    } catch (err: any) {
+      console.error("Login error:", err);
+      res.status(500).json({ error: 'Internal server error: ' + err.message });
     }
   });
 
@@ -253,21 +265,22 @@ async function startServer() {
     try {
       const full = req.query.full === 'true';
       
+      let query;
       if (full) {
-        const result = await pool.query("SELECT * FROM products ORDER BY created_at DESC");
-        return res.json(result.rows);
+        query = 'SELECT *, created_at as "createdAt", updated_at as "updatedAt" FROM products ORDER BY created_at DESC';
+      } else {
+        query = `
+          SELECT id, name, price, category, stock, rating, sold_count, created_at as "createdAt",
+                 (CASE WHEN images IS NOT NULL AND array_length(images, 1) > 0 
+                       THEN ARRAY[images[1]] 
+                       ELSE ARRAY[]::TEXT[] 
+                  END) as images
+          FROM products 
+          ORDER BY created_at DESC
+        `;
       }
-
-      // Optimize: Only return first image for the list to reduce payload size
-      const result = await pool.query(`
-        SELECT id, name, price, category, stock, sold_count, rating, created_at,
-               (CASE WHEN images IS NOT NULL AND array_length(images, 1) > 0 
-                     THEN ARRAY[images[1]] 
-                     ELSE ARRAY[]::TEXT[] 
-                END) as images
-        FROM products 
-        ORDER BY created_at DESC
-      `);
+      
+      const result = await pool.query(query);
       res.json(result.rows);
     } catch (err) {
       console.error("GET /api/products error:", err);
@@ -392,7 +405,7 @@ async function startServer() {
       let result;
       if (user.role === 'admin') {
         result = await pool.query(`
-          SELECT o.*,
+          SELECT o.*, o.total_amount as "totalAmount", o.shipping_address as "shippingAddress", o.created_at as "createdAt",
                  COALESCE(
                    (SELECT json_agg(item_details)
                     FROM (
@@ -408,7 +421,7 @@ async function startServer() {
         `);
       } else {
         result = await pool.query(`
-          SELECT o.*,
+          SELECT o.*, o.total_amount as "totalAmount", o.shipping_address as "shippingAddress", o.created_at as "createdAt",
                  COALESCE(
                    (SELECT json_agg(item_details)
                     FROM (
