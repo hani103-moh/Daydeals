@@ -299,9 +299,12 @@ const authenticateToken = (req: any, res: any, next: any) => {
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
-    const lowerEmail = email.toLowerCase();
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    
+    const lowerEmail = email.toLowerCase().trim();
     const hashedPassword = await bcrypt.hash(password, 10);
     const role = lowerEmail === 'hanichomoh@gmail.com' ? 'admin' : 'user';
+    
     const result = await getPool().query(
       'INSERT INTO users (email, password_hash, display_name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, display_name, role',
       [lowerEmail, hashedPassword, displayName, role]
@@ -321,6 +324,10 @@ app.post("/api/auth/register", async (req, res) => {
     });
   } catch (err: any) {
     console.error("Register error:", err);
+    // Unique violation in Postgres is 23505
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'An account with this email already exists. Please try logging in instead.' });
+    }
     res.status(500).json({ error: err.message });
   }
 });
@@ -328,10 +335,23 @@ app.post("/api/auth/register", async (req, res) => {
 app.post("/api/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
-    const result = await getPool().query('SELECT * FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+    if (!email || !password) return res.status(400).json({ error: 'Email and password are required' });
+    
+    const lowerEmail = email.toLowerCase().trim();
+    console.log(`Login attempt for: ${lowerEmail}`);
+    
+    const result = await getPool().query('SELECT * FROM users WHERE email = $1', [lowerEmail]);
     const user = result.rows[0];
-    if (!user || !(await bcrypt.compare(password, user.password_hash))) {
-      return res.status(400).json({ error: 'Invalid credentials' });
+    
+    if (!user) {
+      console.log(`Login failed: No user found with email ${lowerEmail}`);
+      return res.status(400).json({ error: 'Invalid email or password' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password_hash);
+    if (!isMatch) {
+      console.log(`Login failed: Password mismatch for email ${lowerEmail}`);
+      return res.status(400).json({ error: 'Invalid email or password' });
     }
     
     const wishlistRes = await getPool().query('SELECT product_id FROM wishlist WHERE user_id = $1', [user.id]);
