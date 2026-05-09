@@ -41,7 +41,8 @@ async function initializeDatabase() {
       let client;
       try {
         client = await pool.connect();
-        await client.query(`
+      await client.query(`
+          CREATE EXTENSION IF NOT EXISTS pgcrypto;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
           ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_phone TEXT;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_city TEXT;
@@ -50,9 +51,15 @@ async function initializeDatabase() {
           ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0;
           ALTER TABLE products ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
           ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;
+          
+          -- Fix orders table if it existed without new columns
+          ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_phone TEXT;
+          ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_city TEXT;
+          
           UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com';
           
           -- Performance Indexes
+          CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
           CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
           CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);
           CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
@@ -100,6 +107,7 @@ async function initializeDatabase() {
     client = await pool.connect();
     await client.query('BEGIN');
     await client.query(`
+      CREATE EXTENSION IF NOT EXISTS pgcrypto;
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email VARCHAR(255) UNIQUE NOT NULL,
@@ -112,6 +120,7 @@ async function initializeDatabase() {
         shipping_city TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
       CREATE TABLE IF NOT EXISTS categories (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -200,11 +209,15 @@ let initPromise: Promise<void> | null = null;
 
 async function ensureInitialized() {
   if (isInitialized) return;
+  const start = Date.now();
   if (!initPromise) {
+    console.log("Database not initialized. Starting initialization sequence...");
     initPromise = initializeDatabase().then(() => {
       isInitialized = true;
+      console.log(`Database initialization completed in ${Date.now() - start}ms`);
     }).catch(err => {
       initPromise = null;
+      console.error(`Database initialization FAILED after ${Date.now() - start}ms:`, err);
       throw err;
     });
   }
@@ -217,6 +230,7 @@ app.use(express.json({ limit: '50mb' }));
 
 // Middleware to ensure DB is initialized for API calls
 app.use(async (req, res, next) => {
+  const start = Date.now();
   if (req.url.startsWith('/api') && req.url !== '/api/health' && req.url !== '/api/init-db') {
     try {
       await ensureInitialized();
@@ -232,6 +246,15 @@ app.use(async (req, res, next) => {
       }
     }
   }
+  
+  // Track response completion
+  res.on('finish', () => {
+    if (req.url.startsWith('/api')) {
+      const duration = Date.now() - start;
+      console.log(`${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+    }
+  });
+  
   next();
 });
 
@@ -409,34 +432,28 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
     if (user.role === 'admin') {
       result = await getPool().query(`
         SELECT o.*,
-               COALESCE(
-                 (SELECT json_agg(item_details)
-                  FROM (
-                    SELECT oi.*, p.name, p.images
-                    FROM order_items oi
-                    JOIN products p ON oi.product_id = p.id
-                    WHERE oi.order_id = o.id
-                  ) AS item_details),
-                 '[]'::json
-               ) as items
+               COALESCE(json_agg(item_details) FILTER (WHERE item_details.id IS NOT NULL), '[]'::json) as items
         FROM orders o
+        LEFT JOIN (
+          SELECT oi.*, p.name, p.images
+          FROM order_items oi
+          JOIN products p ON oi.product_id = p.id
+        ) AS item_details ON o.id = item_details.order_id
+        GROUP BY o.id
         ORDER BY o.created_at DESC
       `);
     } else {
       result = await getPool().query(`
         SELECT o.*,
-               COALESCE(
-                 (SELECT json_agg(item_details)
-                  FROM (
-                    SELECT oi.*, p.name, p.images
-                    FROM order_items oi
-                    JOIN products p ON oi.product_id = p.id
-                    WHERE oi.order_id = o.id
-                  ) AS item_details),
-                 '[]'::json
-               ) as items
+               COALESCE(json_agg(item_details) FILTER (WHERE item_details.id IS NOT NULL), '[]'::json) as items
         FROM orders o
+        LEFT JOIN (
+          SELECT oi.*, p.name, p.images
+          FROM order_items oi
+          JOIN products p ON oi.product_id = p.id
+        ) AS item_details ON o.id = item_details.order_id
         WHERE o.user_id = $1
+        GROUP BY o.id
         ORDER BY o.created_at DESC
       `, [user.id]);
     }
@@ -470,9 +487,17 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     const orderId = orderRes.rows[0].id;
     console.log(`Order record created: ${orderId}. Inserting ${items.length} items...`);
     
-    for (const item of items) {
-      await client.query('INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)', [orderId, item.id, item.quantity, item.price]);
+    if (items.length > 0) {
+      const values: any[] = [];
+      const placeholders = items.map((item: any, i: number) => {
+        const offset = i * 4;
+        values.push(orderId, item.id, item.quantity, item.price);
+        return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
+      }).join(', ');
+      
+      await client.query(`INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ${placeholders}`, values);
     }
+    
     await client.query('COMMIT');
     console.log(`Order ${orderId} committed successfully in ${Date.now() - start}ms`);
     res.json({ id: orderId });
@@ -532,6 +557,7 @@ if (!process.env.VERCEL) {
     app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
     app.listen(Number(PORT), "0.0.0.0", () => {
       console.log(`Server running statically on port ${PORT}`);
+      initializeDatabase().then(() => { isInitialized = true; }).catch(console.error);
     });
   });
 }

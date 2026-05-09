@@ -115,7 +115,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     localStorage.setItem('cart', JSON.stringify(cart));
   }, [cart]);
 
-  const fetchCategories = async () => {
+  const fetchCategories = async (retryCount = 0) => {
     try {
       console.log('Fetching categories...');
       const res = await fetchWithTimeout('/api/categories');
@@ -124,33 +124,55 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         console.log('Categories fetched:', data);
         setCategories(data);
       } else {
-        console.error('Fetch categories failed:', await res.text());
+        const text = await res.text();
+        console.error('Fetch categories failed:', text);
+        if (retryCount < 2 && res.status >= 500) {
+          console.log(`Retrying fetch categories (${retryCount + 1})...`);
+          setTimeout(() => fetchCategories(retryCount + 1), 2000);
+        }
       }
     } catch (err) {
       console.error('Fetch categories error:', err);
+      if (retryCount < 2) {
+        console.log(`Retrying fetch categories after error (${retryCount + 1})...`);
+        setTimeout(() => fetchCategories(retryCount + 1), 2000);
+      }
     }
   };
 
-  const fetchProducts = async (full: boolean = false) => {
+  const fetchProducts = async (full: boolean = false, retryCount = 0) => {
     try {
       console.log('Fetching products...', full ? '(full)' : '');
-      const res = await fetchWithTimeout(`/api/products${full ? '?full=true' : ''}`);
+      const res = await fetchWithTimeout(`/api/products${full ? '?full=true' : ''}`, {}, 25000); // 25s timeout
       if (res.ok) {
         const data = await res.json();
         console.log('Products fetched:', data.length);
         setProducts(data);
+        setDbLoading(false);
       } else {
-        console.error('Fetch products failed:', await res.text());
+        const text = await res.text();
+        console.error('Fetch products failed:', text);
+        if (retryCount < 2 && res.status >= 500) {
+          console.log(`Retrying fetch products (${retryCount + 1})...`);
+          setTimeout(() => fetchProducts(full, retryCount + 1), 2000);
+        } else {
+          setDbLoading(false);
+        }
       }
     } catch (err) {
       console.error('Fetch products error:', err);
+      if (retryCount < 2) {
+        console.log(`Retrying fetch products after error (${retryCount + 1})...`);
+        setTimeout(() => fetchProducts(full, retryCount + 1), 2000);
+      } else {
+        setDbLoading(false);
+      }
+      
       if (err instanceof Error && err.name === 'AbortError') {
         console.warn('Network timeout fetching products');
       } else if (err instanceof TypeError && err.message === 'Load failed') {
         console.warn('Network error: Is the server running on port 3000?');
       }
-    } finally {
-      setDbLoading(false);
     }
   };
 
