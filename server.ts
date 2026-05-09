@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { Pool } from "pg";
 import bcrypt from "bcryptjs";
@@ -183,23 +182,25 @@ app.use((req, res, next) => {
 export default app;
 
 // API routes
-app.get("/api/health", async (req, res) => {
-    try {
-      const dbCheck = await pool.query("SELECT 1");
-      res.json({ 
-        status: "ok", 
-        db: "connected", 
-        vercel: !!process.env.VERCEL,
-        mode: process.env.NODE_ENV,
-        timestamp: new Date().toISOString() 
-      });
-    } catch (err) {
-      console.error("Health check DB error:", err);
-      res.status(500).json({ status: "error", message: "Database connection failed", error: String(err) });
-    }
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    vercel: !!process.env.VERCEL,
+    mode: process.env.NODE_ENV,
+    timestamp: new Date().toISOString() 
   });
+});
 
-  app.get("/api/debug-db", async (req, res) => {
+app.get("/api/db-check", async (req, res) => {
+  try {
+    const result = await pool.query("SELECT 1");
+    res.json({ status: "connected", result: result.rows[0] });
+  } catch (err: any) {
+    res.status(500).json({ status: "error", error: err.message });
+  }
+});
+
+app.get("/api/debug-db", async (req, res) => {
     try {
       const tables = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
       const productCount = await pool.query("SELECT count(*) FROM products");
@@ -685,7 +686,6 @@ app.get("/api/health", async (req, res) => {
       const userId = (req as any).user.id;
       const { productIds } = req.body;
       
-      // Update by deleting all and reinserting
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
@@ -702,20 +702,37 @@ app.get("/api/health", async (req, res) => {
         client.release();
       }
     } catch (err) {
+      console.error("Wishlist error:", err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
 
-  async function startServer() {
-    console.log("Starting server in mode:", process.env.NODE_ENV);
-    // Vite middleware setup
-    if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
+  // Global Error Handler
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error("GLOBAL ERROR:", err);
+    res.status(500).json({ 
+      error: "Internal Server Error", 
+      message: err.message,
+      vercel: !!process.env.VERCEL
     });
-    app.use(vite.middlewares);
-  } else {
+  });
+
+  async function startServer() {
+    console.log("Starting server mode:", process.env.NODE_ENV);
+    
+    // Vite middleware setup
+    if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+      try {
+        const { createServer: createViteServer } = await import("vite");
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: "spa",
+        });
+        app.use(vite.middlewares);
+      } catch (e) {
+        console.error("Failed to start Vite:", e);
+      }
+    } else if (process.env.NODE_ENV === "production") {
     const distPath = path.join(process.cwd(), 'dist');
     console.log("Production mode: Serving static files from:", distPath);
     app.use('/assets', express.static(path.join(distPath, 'assets'), {
