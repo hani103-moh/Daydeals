@@ -5,6 +5,7 @@ import { Pool } from "pg";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cors from "cors";
+import crypto from "crypto";
 
 // Neon Connection String Handling
 const neonUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
@@ -53,6 +54,8 @@ async function initializeDatabase() {
           shipping_phone TEXT,
           shipping_city TEXT,
           area TEXT,
+          reset_token TEXT,
+          reset_token_expires TIMESTAMP,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS categories (
@@ -110,6 +113,8 @@ async function initializeDatabase() {
       await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_phone TEXT;`);
       await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_city TEXT;`);
       await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS area TEXT;`);
+      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token TEXT;`);
+      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP;`);
       await client.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100);`);
       await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0;`);
       await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0;`);
@@ -183,6 +188,8 @@ async function initializeDatabase() {
         shipping_phone TEXT,
         shipping_city TEXT,
         area TEXT,
+        reset_token TEXT,
+        reset_token_expires TIMESTAMP,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -435,6 +442,67 @@ app.post("/api/auth/login", async (req, res) => {
     });
   } catch (err: any) {
     console.error("Login error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/forgot-password", async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+    
+    const lowerEmail = email.toLowerCase().trim();
+    const userResult = await getPool().query('SELECT id FROM users WHERE email = $1', [lowerEmail]);
+    
+    if (userResult.rows.length === 0) {
+      // Don't reveal if user exists for security
+      return res.json({ message: 'If an account with that email exists, we have sent a reset link.' });
+    }
+
+    const token = crypto.randomUUID();
+    const expires = new Date(Date.now() + 3600000); // 1 hour
+
+    await getPool().query(
+      'UPDATE users SET reset_token = $1, reset_token_expires = $2 WHERE email = $3',
+      [token, expires, lowerEmail]
+    );
+
+    // MOCK EMAIL: In a real app, you'd use SendGrid/Resend/etc.
+    console.log(`[PASS_RESET] Mock email sent to ${lowerEmail}. Token: ${token}`);
+    console.log(`[PASS_RESET] Reset URL: http://localhost:3000/reset-password?token=${token}`);
+
+    res.json({ message: 'If an account with that email exists, we have sent a reset link (Internal: Check server logs for mock link)' });
+  } catch (err: any) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/auth/reset-password", async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    if (!token || !newPassword) return res.status(400).json({ error: 'Token and new password are required' });
+
+    const userResult = await getPool().query(
+      'SELECT id FROM users WHERE reset_token = $1 AND reset_token_expires > NOW()',
+      [token]
+    );
+
+    if (userResult.rows.length === 0) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    const userId = userResult.rows[0].id;
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    await getPool().query(
+      'UPDATE users SET password_hash = $1, reset_token = NULL, reset_token_expires = NULL WHERE id = $2',
+      [hashedPassword, userId]
+    );
+
+    res.json({ message: 'Password has been reset successfully' });
+  } catch (err: any) {
+    console.error("Reset password error:", err);
     res.status(500).json({ error: err.message });
   }
 });

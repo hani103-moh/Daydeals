@@ -15,6 +15,8 @@ const Orders = lazy(() => import('@/pages/Orders'));
 const Checkout = lazy(() => import('@/pages/Checkout'));
 const Auth = lazy(() => import('@/pages/Auth'));
 const Profile = lazy(() => import('@/pages/Profile'));
+const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
+const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
 const AdminDashboard = lazy(() => import('@/pages/admin/Dashboard'));
 
 const LoadingFallback = () => (
@@ -66,6 +68,8 @@ const AppContent = () => {
                 </ProtectedRoute>
               } />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/checkout" element={
                 <ProtectedRoute>
                   <Checkout />

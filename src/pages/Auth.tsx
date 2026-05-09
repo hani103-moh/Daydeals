@@ -5,7 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Mail, Chrome, ArrowRight, UserPlus, LogIn, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
 
 const Auth = () => {
@@ -108,6 +108,16 @@ const Auth = () => {
               value={formData.password}
               onChange={e => setFormData({...formData, password: e.target.value})}
             />
+            {authMode === 'login' && (
+              <div className="flex justify-end pr-1">
+                <Link 
+                  to="/forgot-password" 
+                  className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground hover:text-primary transition-colors"
+                >
+                  Forgot Password?
+                </Link>
+              </div>
+            )}
           </div>
           <Button 
             type="submit"
