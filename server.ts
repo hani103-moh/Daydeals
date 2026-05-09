@@ -40,7 +40,6 @@ async function initializeDatabase() {
     const check = await pool.query("SELECT 1 FROM users LIMIT 1");
     if (check) {
       console.log("Database already initialized (users table exists)");
-      isInitialized = true;
       return;
     }
   } catch (e) {
@@ -161,22 +160,18 @@ async function initializeDatabase() {
     await client.query('COMMIT');
     console.log("Database initialized successfully");
   } catch (err) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK');
     console.error("Error initializing database:", err);
     throw err;
   } finally {
-    client.release();
+    if (client) client.release();
   }
 }
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// Fast health check BEFORE any middleware or DB init
+// 1. FAST HEALTH CHECK - No middleware, no DB
 app.get("/api/health", (req, res) => {
   res.json({ 
     status: "ok", 
@@ -186,7 +181,11 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Ensure DB is initialized before handling other API requests
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// 2. LOGGING & DB INIT MIDDLEWARE
 let isInitializing = false;
 let isInitialized = false;
 
@@ -207,15 +206,11 @@ app.use(async (req, res, next) => {
 });
 
 app.use((req, res, next) => {
-  console.log(`${req.method} ${req.url}`);
+  if (req.url !== '/api/health') {
+    console.log(`${req.method} ${req.url}`);
+  }
   next();
 });
-
-// Export the app for Vercel
-export { app };
-export default app;
-
-// API routes moved up
 
 app.get("/api/db-check", async (req, res) => {
   try {
@@ -406,7 +401,6 @@ app.get("/api/debug-db", async (req, res) => {
       
       const result = await pool.query(query);
       
-      // Secondary check to ensure price and rating are numbers
       const sanitizedRows = result.rows.map(row => ({
         ...row,
         price: Number(row.price) || 0,
@@ -435,51 +429,44 @@ app.get("/api/debug-db", async (req, res) => {
 
   app.post("/api/products", authenticateAdmin, async (req, res) => {
     try {
-      console.log("POST /api/products received");
       const { name, description, price, category, images, stock } = req.body;
       const id = 'p' + Date.now();
-      console.log(`Creating product ${id}: ${name}`);
       await pool.query(
         'INSERT INTO products (id, name, description, price, category, images, stock, rating) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
         [id, name, description, price, category, images, stock, 0]
       );
-      console.log(`Product ${id} created successfully`);
       res.json({ id });
     } catch (err) {
       console.error('POST /api/products error:', err);
-      res.status(500).json({ error: 'Internal server error', details: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
   app.put("/api/products/:id", authenticateAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      console.log(`PUT /api/products/${id} received`);
       const { name, description, price, category, images, stock } = req.body;
       await pool.query(
         'UPDATE products SET name = $1, description = $2, price = $3, category = $4, images = $5, stock = $6 WHERE id = $7',
         [name, description, price, category, images, stock, id]
       );
-      console.log(`Product ${id} updated successfully`);
       res.json({ message: 'Product updated' });
     } catch (err) {
       console.error(`PUT /api/products/${req.params.id} error:`, err);
-      res.status(500).json({ error: 'Internal server error', details: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
   app.delete("/api/products/:id", authenticateAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      console.log(`DELETE /api/products/${id} received`);
       await pool.query('DELETE FROM wishlist WHERE product_id = $1', [id]);
       await pool.query('DELETE FROM order_items WHERE product_id = $1', [id]);
       await pool.query('DELETE FROM products WHERE id = $1', [id]);
-      console.log(`Product ${id} deleted successfully`);
       res.json({ message: 'Product deleted' });
     } catch (err) {
       console.error(`DELETE /api/products/${req.params.id} error:`, err);
-      res.status(500).json({ error: 'Internal server error', details: err instanceof Error ? err.message : String(err) });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -606,8 +593,6 @@ app.get("/api/debug-db", async (req, res) => {
   app.post("/api/orders", authenticateToken, async (req, res) => {
     const client = await pool.connect();
     try {
-      console.log('Starting order creation for user:', (req as any).user.id);
-      
       const userId = (req as any).user.id;
       const { items, total, shippingAddress } = req.body;
       
@@ -615,10 +600,6 @@ app.get("/api/debug-db", async (req, res) => {
         return res.status(400).json({ error: 'Order must contain items' });
       }
       
-      if (!shippingAddress || typeof shippingAddress !== 'object') {
-        return res.status(400).json({ error: 'Valid shipping address is required' });
-      }
-
       await client.query('BEGIN');
       
       const orderRes = await client.query(
@@ -626,41 +607,23 @@ app.get("/api/debug-db", async (req, res) => {
         [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || 'N/A', shippingAddress.city || 'N/A']
       );
       const orderId = orderRes.rows[0].id;
-      console.log('Order created with ID:', orderId);
 
-      // Pre-calculate values for bundled insertion
-      const itemsValues: any[] = [];
-      const placeHolders: string[] = [];
-      let paramIndex = 2; // Start from $2 because $1 is orderId
-
-      for (const item of items) {
-        placeHolders.push(`($1, $${paramIndex}, $${paramIndex + 1}, $${paramIndex + 2})`);
-        itemsValues.push(item.id, item.quantity, item.price);
-        paramIndex += 3;
-      }
-
-      // Perform stock updates and sold count increments sequentially
-      // Note: PoolClient does not support concurrent queries on the same connection.
       for (const item of items) {
         await client.query(
           'UPDATE products SET stock = stock - $1, sold_count = COALESCE(sold_count, 0) + $1 WHERE id = $2', 
           [item.quantity, item.id]
         );
-      }
-
-      if (placeHolders.length > 0) {
         await client.query(
-          `INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ${placeHolders.join(',')}`,
-          [orderId, ...itemsValues]
+          'INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)',
+          [orderId, item.id, item.quantity, item.price]
         );
       }
 
       await client.query('COMMIT');
-      console.log('Order transaction committed successfully');
       res.json({ id: orderId });
     } catch (err: any) {
       await client.query('ROLLBACK');
-      console.log('Order transaction rolled back due to error:', err);
+      console.error('Order error:', err);
       res.status(500).json({ error: 'Internal server error', details: err.message });
     } finally {
       client.release();
@@ -691,7 +654,6 @@ app.get("/api/debug-db", async (req, res) => {
       
       if (order.status !== 'pending') return res.status(400).json({ error: 'Only pending orders can be cancelled' });
 
-      // Restore stock and decrement sold count
       const items = await pool.query('SELECT product_id, quantity FROM order_items WHERE order_id = $1', [id]);
       for (const item of items.rows) {
         await pool.query('UPDATE products SET stock = stock + $1, sold_count = sold_count - $1 WHERE id = $2', [item.quantity, item.product_id]);
@@ -701,7 +663,6 @@ app.get("/api/debug-db", async (req, res) => {
       await pool.query('DELETE FROM orders WHERE id = $1', [id]);
       res.json({ message: 'Order deleted' });
     } catch (err) {
-      console.error(err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -744,10 +705,7 @@ app.get("/api/debug-db", async (req, res) => {
   });
 
   async function startServer() {
-    if (process.env.VERCEL) {
-      console.log("Vercel runtime: skipping startServer listeners.");
-      return;
-    }
+    if (process.env.VERCEL) return;
 
     console.log("Starting server mode:", process.env.NODE_ENV);
     
@@ -765,7 +723,6 @@ app.get("/api/debug-db", async (req, res) => {
       }
     } else {
       const distPath = path.join(process.cwd(), 'dist');
-      console.log("Production mode: Serving static files from:", distPath);
       app.use('/assets', express.static(path.join(distPath, 'assets'), {
         fallthrough: false,
         maxAge: '1d'
@@ -788,5 +745,11 @@ app.get("/api/debug-db", async (req, res) => {
     });
   }
 
+// Export the app for Vercel
+export default app;
+export { app };
+
 // Start the server setup
-startServer();
+if (!process.env.VERCEL) {
+  startServer();
+}
