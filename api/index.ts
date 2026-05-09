@@ -16,7 +16,7 @@ function getPool() {
     const connectionString = (envDbUrl && envDbUrl.startsWith('postgres')) ? envDbUrl : neonUrl;
     _pool = new Pool({
       connectionString,
-      max: 5,
+      max: 20, // Increased for better concurrency
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 10000,
       ssl: { rejectUnauthorized: false }
@@ -51,7 +51,38 @@ async function initializeDatabase() {
           ALTER TABLE products ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
           ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;
           UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com';
+          
+          -- Performance Indexes
+          CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+          CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);
+          CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+          CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
         `);
+
+        // Check if seeding is needed even if tables existed
+        const catCheck = await client.query('SELECT 1 FROM categories LIMIT 1');
+        if (catCheck.rows.length === 0) {
+          console.log("Seeding categories (empty table)...");
+          await client.query(`
+            INSERT INTO categories (id, name, icon, description) VALUES
+            ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
+            ('c2', 'Clothing', 'Shirt', 'Modern fashion for everyone'),
+            ('c3', 'Home', 'Home', 'Essential household items'),
+            ('c4', 'Beauty', 'Sparkles', 'Cosmetics and skincare')
+          `);
+        }
+
+        const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
+        if (prodCheck.rows.length === 0) {
+          console.log("Seeding products (empty table)...");
+          await client.query(`
+            INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
+            ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
+            ('p2', 'Minimalist Watch', 'Elegant design for every occasion.', 129.50, 'Clothing', ARRAY['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&q=80'], 100, 4.5, 89, ARRAY['fashion', 'accessory'], false),
+            ('p3', 'Smart Speaker', 'Voice-controlled assistant with clear audio.', 79.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1589492477829-5e65395b66cc?w=800&q=80'], 30, 4.2, 56, ARRAY['smart-home', 'audio'], true),
+            ('p4', 'Running Shoes', 'Lightweight and durable for all terrains.', 89.00, 'Clothing', ARRAY['https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80'], 75, 4.7, 210, ARRAY['sport', 'running', 'fitness'], false)
+          `);
+        }
       } catch (e) {
         console.warn("Migration warning (safe to ignore if columns exist):", e);
       } finally {
@@ -329,8 +360,10 @@ app.get("/api/auth/me", authenticateToken, async (req: any, res: any) => {
 
 // Products Routes
 app.get("/api/products", async (req, res) => {
+  const start = Date.now();
   try {
     const result = await getPool().query("SELECT * FROM products ORDER BY created_at DESC");
+    console.log(`Fetch products took ${Date.now() - start}ms - found ${result.rows.length} items`);
     const products = result.rows.map(row => ({
       ...row,
       price: Number(row.price),
@@ -422,20 +455,26 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
 });
 
 app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
+  const start = Date.now();
   const client = await getPool().connect();
   try {
     const userId = req.user.id;
     const { items, total, shippingAddress } = req.body;
+    console.log(`Starting order creation for user ${userId} with ${items?.length} items...`);
+    
     await client.query('BEGIN');
     const orderRes = await client.query(
       'INSERT INTO orders (user_id, total, shipping_address, shipping_phone, shipping_city) VALUES ($1, $2, $3, $4, $5) RETURNING id',
       [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || '', shippingAddress.city || '']
     );
     const orderId = orderRes.rows[0].id;
+    console.log(`Order record created: ${orderId}. Inserting ${items.length} items...`);
+    
     for (const item of items) {
       await client.query('INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ($1, $2, $3, $4)', [orderId, item.id, item.quantity, item.price]);
     }
     await client.query('COMMIT');
+    console.log(`Order ${orderId} committed successfully in ${Date.now() - start}ms`);
     res.json({ id: orderId });
   } catch (err: any) {
     if (client) await client.query('ROLLBACK');

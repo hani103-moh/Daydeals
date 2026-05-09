@@ -40,7 +40,7 @@ const Home = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<'newest' | 'price-low' | 'price-high'>('newest');
-  const { products, categories, dbLoading } = useStore();
+  const { products, categories, dbLoading, fetchProducts } = useStore();
 
   const filteredProducts = useMemo(() => {
     let filtered = products.filter(product => {
@@ -203,9 +203,14 @@ const Home = () => {
               <div className="py-20 text-center space-y-4 glass rounded-3xl border border-white/5 mx-4">
                 <Search className="w-12 h-12 mx-auto text-muted-foreground/20" />
                 <p className="text-muted-foreground font-medium">No products found matching your search.</p>
-                <Button variant="outline" onClick={() => { setSearchTerm(''); setSelectedCategory(null); }}>
-                  Reset Filters
-                </Button>
+                <div className="flex justify-center gap-4">
+                  <Button variant="outline" onClick={() => { setSearchTerm(''); setSelectedCategory(null); }}>
+                    Reset Filters
+                  </Button>
+                  <Button onClick={() => fetchProducts()}>
+                    Refresh Data
+                  </Button>
+                </div>
               </div>
             )}
           </>
