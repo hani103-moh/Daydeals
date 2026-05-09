@@ -2,16 +2,17 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import { Pool } from "pg";
-import bcrypt from "bcrypt";
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import cors from "cors";
 
-const neonUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+const neonUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
 const envDbUrl = process.env.DATABASE_URL;
 const connectionString = (envDbUrl && envDbUrl.startsWith('postgres')) ? envDbUrl : neonUrl;
 
 const pool = new Pool({
   connectionString,
-  max: 20,
+  max: 10,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 5000,
 });
@@ -129,24 +130,39 @@ async function initializeDatabase() {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Ensure DB is initialized before handling API requests
+let isInitializing = false;
+let isInitialized = false;
+
+app.use(async (req, res, next) => {
+  if (req.url.startsWith('/api') && !isInitialized && !isInitializing) {
+    isInitializing = true;
+    try {
+      await initializeDatabase();
+      isInitialized = true;
+    } catch (err) {
+      console.error("Auto-initialization failed:", err);
+    } finally {
+      isInitializing = false;
+    }
+  }
+  next();
+});
+
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
+
 // Export the app for Vercel
 export default app;
 
-async function startServer() {
-  console.log("Starting server in mode:", process.env.NODE_ENV);
-  console.log("Current working directory:", process.cwd());
-
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-  // API logging middleware
-  app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url}`);
-    next();
-  });
-
-  // API routes
-  app.get("/api/health", async (req, res) => {
+// API routes
+app.get("/api/health", async (req, res) => {
     try {
       const dbCheck = await pool.query("SELECT 1");
       res.json({ 
@@ -658,8 +674,10 @@ async function startServer() {
     }
   });
 
-  // Vite middleware setup
-  if (process.env.NODE_ENV !== "production") {
+  async function startServer() {
+    console.log("Starting server in mode:", process.env.NODE_ENV);
+    // Vite middleware setup
+    if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
