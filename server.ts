@@ -751,22 +751,16 @@ app.get("/api/debug-db", async (req, res) => {
     });
   }
 
-  // Start listening only if not on Vercel
+  // Use lazy init via middleware on Vercel, only listen on local
   if (!process.env.VERCEL) {
     app.listen(Number(PORT), "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
-      // Initialize DB after starting server
       initializeDatabase().catch(err => {
         console.error("Delayed database initialization failed:", err);
       });
     });
   } else {
-    // On Vercel, we don't call app.listen()
-    // but we still need to initialize the DB
-    console.log("Vercel mode: Database initialization starting...");
-    initializeDatabase().catch(err => {
-      console.error("Vercel database initialization failed:", err);
-    });
+    console.log("Vercel mode: Standard boot.");
   }
 }
 
