@@ -65,6 +65,9 @@ async function initializeDatabase() {
         stock INTEGER DEFAULT 0,
         sold_count INTEGER DEFAULT 0,
         rating DECIMAL(3, 1),
+        reviews_count INTEGER DEFAULT 0,
+        tags TEXT[] DEFAULT '{}',
+        is_featured BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS orders (
@@ -95,7 +98,35 @@ async function initializeDatabase() {
     await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'`);
     await client.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100)`);
     await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0`);
+    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'`);
+    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false`);
     await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`);
+
+    // SEEDING
+    const catCheck = await client.query('SELECT 1 FROM categories LIMIT 1');
+    if (catCheck.rows.length === 0) {
+      console.log("Seeding initial categories...");
+      await client.query(`
+        INSERT INTO categories (id, name, icon, description) VALUES
+        ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
+        ('c2', 'Clothing', 'Shirt', 'Modern fashion for everyone'),
+        ('c3', 'Home', 'Home', 'Essential household items'),
+        ('c4', 'Beauty', 'Sparkles', 'Cosmetics and skincare')
+      `);
+    }
+
+    const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
+    if (prodCheck.rows.length === 0) {
+      console.log("Seeding initial products...");
+      await client.query(`
+        INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
+        ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
+        ('p2', 'Minimalist Watch', 'Elegant design for every occasion.', 129.50, 'Clothing', ARRAY['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&q=80'], 100, 4.5, 89, ARRAY['fashion', 'accessory'], false),
+        ('p3', 'Smart Speaker', 'Voice-controlled assistant with clear audio.', 79.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1589492477829-5e65395b66cc?w=800&q=80'], 30, 4.2, 56, ARRAY['smart-home', 'audio'], true),
+        ('p4', 'Running Shoes', 'Lightweight and durable for all terrains.', 89.00, 'Clothing', ARRAY['https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80'], 75, 4.7, 210, ARRAY['sport', 'running', 'fitness'], false)
+      `);
+    }
 
     await client.query('COMMIT');
     console.log("Database initialized successfully");
@@ -108,22 +139,61 @@ async function initializeDatabase() {
   }
 }
 
+// DB INIT MIDDLEWARE & FLAG
+let isInitialized = false;
+let initPromise: Promise<void> | null = null;
+
+async function ensureInitialized() {
+  if (isInitialized) return;
+  if (!initPromise) {
+    initPromise = initializeDatabase().then(() => {
+      isInitialized = true;
+    }).catch(err => {
+      initPromise = null;
+      throw err;
+    });
+  }
+  return initPromise;
+}
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// Middleware to ensure DB is initialized for API calls
+app.use(async (req, res, next) => {
+  if (req.url.startsWith('/api') && req.url !== '/api/health' && req.url !== '/api/init-db') {
+    try {
+      await ensureInitialized();
+    } catch (err: any) {
+      console.error("Auto-init failed:", err);
+      // If we are getting a 500 error on every API call because of DB, it helps to know why
+      if (!isInitialized) {
+        return res.status(503).json({ 
+          error: "Database initializing or failed to initialize", 
+          details: err.message,
+          retryAfter: 5
+        });
+      }
+    }
+  }
+  next();
+});
 
 app.get("/api/health", (req, res) => {
   res.json({ 
     status: "ok", 
     vercel: !!process.env.VERCEL,
-    timestamp: new Date().toISOString() 
+    timestamp: new Date().toISOString(),
+    dbInitialized: isInitialized
   });
 });
 
 app.get("/api/init-db", async (req, res) => {
   try {
     await initializeDatabase();
-    res.json({ status: "success" });
+    isInitialized = true;
+    res.json({ status: "success", message: "Database initialized" });
   } catch (err: any) {
     res.status(500).json({ status: "error", error: err.message });
   }
@@ -153,8 +223,19 @@ app.post("/api/auth/register", async (req, res) => {
     );
     const user = result.rows[0];
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET);
-    res.json({ token, user: { uid: user.id, email: user.email, displayName: user.display_name, role: user.role } });
+    res.json({ 
+      token, 
+      user: { 
+        uid: user.id, 
+        email: user.email, 
+        displayName: user.display_name, 
+        role: user.role,
+        wishlist: [],
+        createdAt: Date.now()
+      } 
+    });
   } catch (err: any) {
+    console.error("Register error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -167,8 +248,56 @@ app.post("/api/auth/login", async (req, res) => {
     if (!user || !(await bcrypt.compare(password, user.password_hash))) {
       return res.status(400).json({ error: 'Invalid credentials' });
     }
+    
+    const wishlistRes = await getPool().query('SELECT product_id FROM wishlist WHERE user_id = $1', [user.id]);
+    const wishlist = wishlistRes.rows.map(r => r.product_id);
+
     const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-    res.json({ token, user: { uid: user.id, email: user.email, displayName: user.display_name, role: user.role } });
+    res.json({ 
+      token, 
+      user: { 
+        uid: user.id, 
+        email: user.email, 
+        displayName: user.display_name, 
+        role: user.role,
+        photoURL: user.photo_url,
+        shippingAddress: user.shipping_address,
+        shippingPhone: user.shipping_phone,
+        shippingCity: user.shipping_city,
+        wishlist: wishlist,
+        createdAt: new Date(user.created_at).getTime()
+      } 
+    });
+  } catch (err: any) {
+    console.error("Login error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/auth/me", authenticateToken, async (req: any, res: any) => {
+  try {
+    const userId = req.user.id;
+    const result = await getPool().query('SELECT * FROM users WHERE id = $1', [userId]);
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    const wishlistRes = await getPool().query('SELECT product_id FROM wishlist WHERE user_id = $1', [user.id]);
+    const wishlist = wishlistRes.rows.map(r => r.product_id);
+
+    res.json({ 
+      user: { 
+        uid: user.id, 
+        email: user.email, 
+        displayName: user.display_name, 
+        role: user.role,
+        photoURL: user.photo_url,
+        shippingAddress: user.shipping_address,
+        shippingPhone: user.shipping_phone,
+        shippingCity: user.shipping_city,
+        wishlist: wishlist,
+        createdAt: new Date(user.created_at).getTime()
+      } 
+    });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -178,7 +307,19 @@ app.post("/api/auth/login", async (req, res) => {
 app.get("/api/products", async (req, res) => {
   try {
     const result = await getPool().query("SELECT * FROM products ORDER BY created_at DESC");
-    res.json(result.rows);
+    const products = result.rows.map(row => ({
+      ...row,
+      price: Number(row.price),
+      rating: Number(row.rating),
+      sold_count: Number(row.sold_count || 0),
+      soldCount: Number(row.sold_count || 0),
+      reviewsCount: Number(row.reviews_count || 0),
+      isFeatured: !!row.is_featured,
+      createdAt: new Date(row.created_at).getTime(),
+      updatedAt: new Date(row.created_at).getTime(),
+      tags: row.tags || []
+    }));
+    res.json(products);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -242,7 +383,15 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
         ORDER BY o.created_at DESC
       `, [user.id]);
     }
-    res.json(result.rows);
+    const orders = result.rows.map(row => ({
+      ...row,
+      userId: row.user_id,
+      totalAmount: Number(row.total),
+      shippingAddress: typeof row.shipping_address === 'string' ? JSON.parse(row.shipping_address) : row.shipping_address,
+      createdAt: new Date(row.created_at).getTime(),
+      updatedAt: new Date(row.created_at).getTime()
+    }));
+    res.json(orders);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
