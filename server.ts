@@ -96,9 +96,13 @@ async function initializeDatabase() {
       );
       
       -- Seed DB if empty
-      INSERT INTO categories (id, name, image, description)
-      SELECT '1', 'Electronics', 'https://images.unsplash.com/photo-1498049794561-7780e7231661?w=500&q=80', 'Tech gadgets and devices'
+      INSERT INTO categories (id, name, icon, description)
+      SELECT '1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'
       WHERE NOT EXISTS (SELECT 1 FROM categories);
+      
+      INSERT INTO categories (id, name, icon, description)
+      SELECT '2', 'Clothing', 'Shirt', 'Fashionable clothes'
+      WHERE NOT EXISTS (SELECT 1 FROM categories WHERE id = '2');
       
       INSERT INTO products (id, name, description, price, category, images, stock, rating)
       SELECT 'p1', 'Wireless Headphones', 'Premium wireless headphones.', 299.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&q=80'], 15, 4.8
@@ -155,24 +159,24 @@ async function startServer() {
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      console.log("Registering user:", req.body.email);
       const { email, password, displayName } = req.body;
-      
       if (!email || !password || !displayName) {
         return res.status(400).json({ error: 'Missing required fields' });
       }
+      const lowerEmail = email.toLowerCase();
+      console.log("Registering user:", lowerEmail);
 
       const hashedPassword = await bcrypt.hash(password, 10);
-      const role = email === 'hanichomoh@gmail.com' ? 'admin' : 'user';
+      const role = lowerEmail === 'hanichomoh@gmail.com' ? 'admin' : 'user';
 
       const result = await pool.query(
         'INSERT INTO users (email, password_hash, display_name, role) VALUES ($1, $2, $3, $4) RETURNING id, email, display_name, role',
-        [email, hashedPassword, displayName, role]
+        [lowerEmail, hashedPassword, displayName, role]
       );
       const user = result.rows[0];
       const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET);
       
-      console.log("Registration successful for:", email);
+      console.log("Registration successful for:", lowerEmail);
       res.json({ token, user: { uid: user.id, email: user.email, displayName: user.display_name, role: user.role } });
     } catch (err: any) {
       console.error("Register error:", err);
@@ -187,20 +191,21 @@ async function startServer() {
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = req.body;
-      console.log("Login attempt for:", email);
+      const lowerEmail = (email || '').toLowerCase();
+      console.log("Login attempt for:", lowerEmail);
 
-      const result = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+      const result = await pool.query('SELECT * FROM users WHERE email = $1', [lowerEmail]);
       const user = result.rows[0];
 
       if (!user) {
-        console.warn("User not found:", email);
+        console.warn("User not found:", lowerEmail);
         return res.status(400).json({ error: 'Invalid email or password' });
       }
 
       console.log("User found, comparing passwords...");
       const validPassword = await bcrypt.compare(password, user.password_hash);
       if (!validPassword) {
-        console.warn("Invalid password for:", email);
+        console.warn("Invalid password for:", lowerEmail);
         return res.status(400).json({ error: 'Invalid email or password' });
       }
 
@@ -267,14 +272,25 @@ async function startServer() {
       
       let query;
       if (full) {
-        query = 'SELECT *, created_at as "createdAt", updated_at as "updatedAt" FROM products ORDER BY created_at DESC';
+        query = `
+          SELECT 
+            id, name, description, price::FLOAT as price, category, images, stock, 
+            COALESCE(sold_count, 0) as sold_count, rating,
+            EXTRACT(EPOCH FROM created_at) * 1000 as "createdAt",
+            EXTRACT(EPOCH FROM updated_at) * 1000 as "updatedAt"
+          FROM products 
+          ORDER BY created_at DESC
+        `;
       } else {
         query = `
-          SELECT id, name, price, category, stock, rating, sold_count, created_at as "createdAt",
-                 (CASE WHEN images IS NOT NULL AND array_length(images, 1) > 0 
-                       THEN ARRAY[images[1]] 
-                       ELSE ARRAY[]::TEXT[] 
-                  END) as images
+          SELECT 
+            id, name, description, price::FLOAT as price, category, stock, rating, 
+            COALESCE(sold_count, 0) as sold_count,
+            EXTRACT(EPOCH FROM created_at) * 1000 as "createdAt",
+            (CASE WHEN images IS NOT NULL AND array_length(images, 1) > 0 
+                  THEN ARRAY[images[1]] 
+                  ELSE ARRAY[]::TEXT[] 
+             END) as images
           FROM products 
           ORDER BY created_at DESC
         `;
@@ -405,7 +421,7 @@ async function startServer() {
       let result;
       if (user.role === 'admin') {
         result = await pool.query(`
-          SELECT o.*, o.total_amount as "totalAmount", o.shipping_address as "shippingAddress", o.created_at as "createdAt",
+          SELECT o.*,
                  COALESCE(
                    (SELECT json_agg(item_details)
                     FROM (
@@ -421,7 +437,7 @@ async function startServer() {
         `);
       } else {
         result = await pool.query(`
-          SELECT o.*, o.total_amount as "totalAmount", o.shipping_address as "shippingAddress", o.created_at as "createdAt",
+          SELECT o.*,
                  COALESCE(
                    (SELECT json_agg(item_details)
                     FROM (
@@ -453,8 +469,10 @@ async function startServer() {
         }
         return {
           ...order,
-          totalAmount: order.total,
-          createdAt: order.created_at,
+          userId: order.user_id,
+          totalAmount: parseFloat(order.total),
+          createdAt: new Date(order.created_at).getTime(),
+          updatedAt: order.updated_at ? new Date(order.updated_at).getTime() : new Date(order.created_at).getTime(),
           shippingAddress
         };
       });
