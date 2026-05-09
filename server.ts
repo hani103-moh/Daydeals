@@ -718,10 +718,15 @@ app.get("/api/debug-db", async (req, res) => {
   });
 
   async function startServer() {
+    if (process.env.VERCEL) {
+      console.log("Vercel runtime: skipping startServer listeners.");
+      return;
+    }
+
     console.log("Starting server mode:", process.env.NODE_ENV);
     
     // Vite middleware setup
-    if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
+    if (process.env.NODE_ENV !== "production") {
       try {
         const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
@@ -732,37 +737,30 @@ app.get("/api/debug-db", async (req, res) => {
       } catch (e) {
         console.error("Failed to start Vite:", e);
       }
-    } else if (process.env.NODE_ENV === "production") {
-    const distPath = path.join(process.cwd(), 'dist');
-    console.log("Production mode: Serving static files from:", distPath);
-    app.use('/assets', express.static(path.join(distPath, 'assets'), {
-      fallthrough: false, // Don't fall through to SPA fallback for /assets
-      maxAge: '1d'
-    }));
-    app.use(express.static(distPath));
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      console.log("Production mode: Serving static files from:", distPath);
+      app.use('/assets', express.static(path.join(distPath, 'assets'), {
+        fallthrough: false,
+        maxAge: '1d'
+      }));
+      app.use(express.static(distPath));
 
-    app.get('*', (req, res) => {
-      // If it looks like a file request but wasn't caught by express.static, it's missing
-      if (req.url.includes('.') || req.url.startsWith('/assets/')) {
-        console.error("File not found:", req.url);
-        return res.status(404).send('Not found');
-      }
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
+      app.get('*', (req, res) => {
+        if (req.url.includes('.') || req.url.startsWith('/assets/')) {
+          return res.status(404).send('Not found');
+        }
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
 
-  // Use lazy init via middleware on Vercel, only listen on local
-  if (!process.env.VERCEL) {
     app.listen(Number(PORT), "0.0.0.0", () => {
       console.log(`Server running on http://localhost:${PORT}`);
       initializeDatabase().catch(err => {
         console.error("Delayed database initialization failed:", err);
       });
     });
-  } else {
-    console.log("Vercel mode: Standard boot.");
   }
-}
 
 // Start the server setup
 startServer();
