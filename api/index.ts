@@ -30,7 +30,40 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 async function initializeDatabase() {
   const pool = getPool();
-  console.log("Initializing database schema...");
+  
+  // 1. FAST CHECK: If users table exists, skip main init
+  try {
+    const tableCheck = await pool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1");
+    if (tableCheck.rows.length > 0) {
+      console.log("Database tables already exist. Running light migrations if needed...");
+      
+      // Still run migrations but don't re-create everything
+      let client;
+      try {
+        client = await pool.connect();
+        await client.query(`
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_phone TEXT;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_city TEXT;
+          ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100);
+          ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0;
+          ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0;
+          ALTER TABLE products ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';
+          ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;
+          UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com';
+        `);
+      } catch (e) {
+        console.warn("Migration warning (safe to ignore if columns exist):", e);
+      } finally {
+        if (client) client.release();
+      }
+      return;
+    }
+  } catch (e) {
+    console.log("Users table check failed, proceeding with full init.");
+  }
+
+  console.log("Performing full database initialization...");
   let client;
   try {
     client = await pool.connect();
@@ -94,19 +127,11 @@ async function initializeDatabase() {
       );
     `);
     
-    // Migrations
-    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'`);
-    await client.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100)`);
-    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0`);
-    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0`);
-    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'`);
-    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false`);
     await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`);
 
     // SEEDING
     const catCheck = await client.query('SELECT 1 FROM categories LIMIT 1');
     if (catCheck.rows.length === 0) {
-      console.log("Seeding initial categories...");
       await client.query(`
         INSERT INTO categories (id, name, icon, description) VALUES
         ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
@@ -118,7 +143,6 @@ async function initializeDatabase() {
 
     const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
     if (prodCheck.rows.length === 0) {
-      console.log("Seeding initial products...");
       await client.query(`
         INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
         ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
@@ -404,8 +428,8 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     const { items, total, shippingAddress } = req.body;
     await client.query('BEGIN');
     const orderRes = await client.query(
-      'INSERT INTO orders (user_id, total, shipping_address) VALUES ($1, $2, $3) RETURNING id',
-      [userId, total, JSON.stringify(shippingAddress)]
+      'INSERT INTO orders (user_id, total, shipping_address, shipping_phone, shipping_city) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+      [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || '', shippingAddress.city || '']
     );
     const orderId = orderRes.rows[0].id;
     for (const item of items) {
@@ -414,7 +438,8 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     await client.query('COMMIT');
     res.json({ id: orderId });
   } catch (err: any) {
-    await client.query('ROLLBACK');
+    if (client) await client.query('ROLLBACK');
+    console.error("Order creation error:", err);
     res.status(500).json({ error: err.message });
   } finally {
     client.release();

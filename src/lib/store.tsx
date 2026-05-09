@@ -96,8 +96,13 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           setUser(data.user);
           setWishlist(data.user.wishlist || []);
           fetchOrders();
-        } else {
+        } else if (res.status === 401 || res.status === 403) {
+          console.warn('Auth token expired or invalid, logging out');
           localStorage.removeItem('token');
+          setUser(null);
+        } else {
+          console.error(`Auth check failed with status ${res.status}`);
+          // Don't remove token for 500/503 errors as the server might just be busy
         }
       } catch (err) {
         console.error(err);
