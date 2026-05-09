@@ -79,6 +79,14 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       
+      -- Ensure 'total' column exists (migration helper if it was named total_amount)
+      DO $$ 
+      BEGIN 
+        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='total_amount') THEN
+          ALTER TABLE orders RENAME COLUMN total_amount TO total;
+        END IF;
+      END $$;
+      
       CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
       
       CREATE TABLE IF NOT EXISTS order_items (
@@ -193,28 +201,44 @@ async function startServer() {
   app.post("/api/auth/login", async (req, res) => {
     try {
       const { email, password } = req.body;
-      const lowerEmail = (email || '').toLowerCase();
+      if (!email || !password) {
+        return res.status(400).json({ error: 'Email and password are required' });
+      }
+      const lowerEmail = email.toLowerCase().trim();
       console.log("Login attempt for:", lowerEmail);
 
       const result = await pool.query('SELECT * FROM users WHERE email = $1', [lowerEmail]);
       const user = result.rows[0];
 
       if (!user) {
-        console.warn("User not found:", lowerEmail);
+        console.warn("User not found in DB:", lowerEmail);
         return res.status(400).json({ error: 'Invalid email or password' });
       }
 
-      console.log("User found, comparing passwords...");
+      console.log("User found, comparing passwords for:", lowerEmail);
       const validPassword = await bcrypt.compare(password, user.password_hash);
       if (!validPassword) {
         console.warn("Invalid password for:", lowerEmail);
         return res.status(400).json({ error: 'Invalid email or password' });
       }
 
-      console.log("Password valid, signing token...");
-      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET);
+      console.log("Password valid for:", lowerEmail, "Role:", user.role);
+      const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
       
-      res.json({ token, user: { uid: user.id, email: user.email, displayName: user.display_name, role: user.role, photoURL: user.photo_url, wishlist: [] } });
+      res.json({ 
+        token, 
+        user: { 
+          uid: user.id, 
+          email: user.email, 
+          displayName: user.display_name, 
+          role: user.role, 
+          photoURL: user.photo_url,
+          shippingAddress: user.shipping_address,
+          shippingPhone: user.shipping_phone,
+          shippingCity: user.shipping_city,
+          wishlist: [] 
+        } 
+      });
     } catch (err: any) {
       console.error("Login error:", err);
       res.status(500).json({ error: 'Internal server error: ' + err.message });
@@ -278,8 +302,7 @@ async function startServer() {
           SELECT 
             id, name, description, price::FLOAT as price, category, images, stock, 
             COALESCE(sold_count, 0) as sold_count, rating::FLOAT as rating,
-            (EXTRACT(EPOCH FROM created_at) * 1000)::FLOAT as "createdAt",
-            (EXTRACT(EPOCH FROM updated_at) * 1000)::FLOAT as "updatedAt"
+            (EXTRACT(EPOCH FROM created_at) * 1000)::FLOAT as "createdAt"
           FROM products 
           ORDER BY created_at DESC
         `;
@@ -299,7 +322,16 @@ async function startServer() {
       }
       
       const result = await pool.query(query);
-      res.json(result.rows);
+      
+      // Secondary check to ensure price and rating are numbers
+      const sanitizedRows = result.rows.map(row => ({
+        ...row,
+        price: Number(row.price) || 0,
+        rating: Number(row.rating) || 0,
+        createdAt: Number(row.createdAt) || Date.now()
+      }));
+      
+      res.json(sanitizedRows);
     } catch (err) {
       console.error("GET /api/products error:", err);
       res.status(500).json({ error: "Internal server error" });
@@ -474,7 +506,7 @@ async function startServer() {
         return {
           ...order,
           userId: order.user_id,
-          totalAmount: parseFloat(order.total),
+          totalAmount: parseFloat(order.total || order.total_amount || 0),
           createdAt: new Date(order.created_at).getTime(),
           updatedAt: order.updated_at ? new Date(order.updated_at).getTime() : new Date(order.created_at).getTime(),
           shippingAddress

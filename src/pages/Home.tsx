@@ -48,7 +48,8 @@ const Home = () => {
       const description = product.description?.toLowerCase() || '';
       const matchesSearch = name.includes(searchTerm.toLowerCase()) ||
                            description.includes(searchTerm.toLowerCase());
-      const matchesCategory = !selectedCategory || product.category === selectedCategory;
+      const matchesCategory = !selectedCategory || 
+                              (product.category && product.category.toLowerCase().trim() === selectedCategory.toLowerCase().trim());
       return matchesSearch && matchesCategory;
     });
 
