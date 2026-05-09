@@ -14,7 +14,7 @@ console.log("Connecting to DB:", connectionString.split('@')[1] || "fallback");
 
 const pool = new Pool({
   connectionString,
-  max: 10,
+  max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 10000,
   ssl: {
@@ -27,10 +27,32 @@ pool.on('error', (err) => {
 });
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
+let globalInitError: any = null;
+
 async function initializeDatabase() {
-  console.log("Initializing database...");
-  const client = await pool.connect();
+  if (globalInitError) {
+    console.warn("Skipping DB init due to previous error:", globalInitError.message);
+    return;
+  }
+  
+  // Quick check if already initialized
   try {
+    const check = await pool.query("SELECT 1 FROM users LIMIT 1");
+    if (check) {
+      console.log("Database already initialized (users table exists)");
+      isInitialized = true;
+      return;
+    }
+  } catch (e) {
+    // Table probably doesn't exist, proceed with full init
+    console.log("Users table not found, starting full initialization...");
+  }
+
+  console.log("Initializing database schema...");
+  let client;
+  try {
+    client = await pool.connect();
+    console.log("DB connected successfully");
     await client.query('BEGIN');
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -154,18 +176,29 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Ensure DB is initialized before handling API requests
+// Fast health check BEFORE any middleware or DB init
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    status: "ok", 
+    vercel: !!process.env.VERCEL,
+    mode: process.env.NODE_ENV,
+    timestamp: new Date().toISOString() 
+  });
+});
+
+// Ensure DB is initialized before handling other API requests
 let isInitializing = false;
 let isInitialized = false;
 
 app.use(async (req, res, next) => {
-  if (req.url.startsWith('/api') && !isInitialized && !isInitializing) {
+  if (req.url.startsWith('/api') && req.url !== '/api/health' && !isInitialized && !isInitializing) {
     isInitializing = true;
     try {
       await initializeDatabase();
       isInitialized = true;
-    } catch (err) {
+    } catch (err: any) {
       console.error("Auto-initialization failed:", err);
+      globalInitError = err;
     } finally {
       isInitializing = false;
     }
@@ -179,17 +212,10 @@ app.use((req, res, next) => {
 });
 
 // Export the app for Vercel
+export { app };
 export default app;
 
-// API routes
-app.get("/api/health", (req, res) => {
-  res.json({ 
-    status: "ok", 
-    vercel: !!process.env.VERCEL,
-    mode: process.env.NODE_ENV,
-    timestamp: new Date().toISOString() 
-  });
-});
+// API routes moved up
 
 app.get("/api/db-check", async (req, res) => {
   try {
