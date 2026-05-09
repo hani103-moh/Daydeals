@@ -44,8 +44,12 @@ async function initializeDatabase() {
       await client.query(`
           CREATE EXTENSION IF NOT EXISTS pgcrypto;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100);
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_address TEXT;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_phone TEXT;
           ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_city TEXT;
+          ALTER TABLE users ADD COLUMN IF NOT EXISTS area TEXT;
           ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100);
           ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0;
           ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0;
@@ -55,6 +59,7 @@ async function initializeDatabase() {
           -- Fix orders table if it existed without new columns
           ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_phone TEXT;
           ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_city TEXT;
+          ALTER TABLE orders ADD COLUMN IF NOT EXISTS area TEXT;
           
           UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com';
           
@@ -118,6 +123,7 @@ async function initializeDatabase() {
         shipping_address TEXT,
         shipping_phone TEXT,
         shipping_city TEXT,
+        area TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
@@ -151,6 +157,7 @@ async function initializeDatabase() {
         shipping_address TEXT,
         shipping_phone TEXT,
         shipping_city TEXT,
+        area TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE IF NOT EXISTS order_items (
@@ -342,6 +349,7 @@ app.post("/api/auth/login", async (req, res) => {
         shippingAddress: user.shipping_address,
         shippingPhone: user.shipping_phone,
         shippingCity: user.shipping_city,
+        area: user.area,
         wishlist: wishlist,
         createdAt: new Date(user.created_at).getTime()
       } 
@@ -372,11 +380,66 @@ app.get("/api/auth/me", authenticateToken, async (req: any, res: any) => {
         shippingAddress: user.shipping_address,
         shippingPhone: user.shipping_phone,
         shippingCity: user.shipping_city,
+        area: user.area,
         wishlist: wishlist,
         createdAt: new Date(user.created_at).getTime()
       } 
     });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/auth/profile", authenticateToken, async (req: any, res: any) => {
+  try {
+    const userId = req.user.id;
+    const { displayName, shippingAddress, shippingPhone, shippingCity, area, photoURL } = req.body;
+    
+    console.log(`Updating profile for user ${userId}:`, { displayName, shippingAddress, shippingPhone, shippingCity, area });
+
+    const result = await getPool().query(
+      `UPDATE users 
+       SET display_name = COALESCE($1, display_name), 
+           shipping_address = COALESCE($2, shipping_address),
+           shipping_phone = COALESCE($3, shipping_phone),
+           shipping_city = COALESCE($4, shipping_city),
+           area = COALESCE($5, area),
+           photo_url = COALESCE($6, photo_url)
+       WHERE id = $7
+       RETURNING *`,
+      [
+        displayName || null, 
+        shippingAddress || null, 
+        shippingPhone || null, 
+        shippingCity || null, 
+        area || null,
+        photoURL || null, 
+        userId
+      ]
+    );
+
+    const user = result.rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    console.log(`Profile updated successfully for user ${userId}`);
+
+    res.json({ 
+      message: 'Profile updated successfully',
+      user: { 
+        uid: user.id, 
+        email: user.email, 
+        displayName: user.display_name, 
+        role: user.role,
+        photoURL: user.photo_url,
+        shippingAddress: user.shipping_address,
+        shippingPhone: user.shipping_phone,
+        shippingCity: user.shipping_city,
+        area: user.area,
+        createdAt: new Date(user.created_at).getTime()
+      } 
+    });
+  } catch (err: any) {
+    console.error("Update profile error details:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -481,8 +544,8 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     
     await client.query('BEGIN');
     const orderRes = await client.query(
-      'INSERT INTO orders (user_id, total, shipping_address, shipping_phone, shipping_city) VALUES ($1, $2, $3, $4, $5) RETURNING id',
-      [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || '', shippingAddress.city || '']
+      'INSERT INTO orders (user_id, total, shipping_address, shipping_phone, shipping_city, area) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
+      [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || '', shippingAddress.city || '', shippingAddress.area || '']
     );
     const orderId = orderRes.rows[0].id;
     console.log(`Order record created: ${orderId}. Inserting ${items.length} items...`);

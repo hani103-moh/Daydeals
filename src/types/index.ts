@@ -55,6 +55,7 @@ export interface UserProfile {
   shippingAddress?: string;
   shippingPhone?: string;
   shippingCity?: string;
+  area?: string;
   createdAt: number;
 }
 
