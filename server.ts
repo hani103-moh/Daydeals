@@ -48,6 +48,8 @@ async function initializeDatabase() {
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
+      ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100);
       
       CREATE TABLE IF NOT EXISTS products (
         id VARCHAR(255) PRIMARY KEY,
@@ -275,18 +277,18 @@ async function startServer() {
         query = `
           SELECT 
             id, name, description, price::FLOAT as price, category, images, stock, 
-            COALESCE(sold_count, 0) as sold_count, rating,
-            EXTRACT(EPOCH FROM created_at) * 1000 as "createdAt",
-            EXTRACT(EPOCH FROM updated_at) * 1000 as "updatedAt"
+            COALESCE(sold_count, 0) as sold_count, rating::FLOAT as rating,
+            (EXTRACT(EPOCH FROM created_at) * 1000)::FLOAT as "createdAt",
+            (EXTRACT(EPOCH FROM updated_at) * 1000)::FLOAT as "updatedAt"
           FROM products 
           ORDER BY created_at DESC
         `;
       } else {
         query = `
           SELECT 
-            id, name, description, price::FLOAT as price, category, stock, rating, 
+            id, name, description, price::FLOAT as price, category, stock, rating::FLOAT as rating, 
             COALESCE(sold_count, 0) as sold_count,
-            EXTRACT(EPOCH FROM created_at) * 1000 as "createdAt",
+            (EXTRACT(EPOCH FROM created_at) * 1000)::FLOAT as "createdAt",
             (CASE WHEN images IS NOT NULL AND array_length(images, 1) > 0 
                   THEN ARRAY[images[1]] 
                   ELSE ARRAY[]::TEXT[] 
@@ -378,14 +380,15 @@ async function startServer() {
 
   app.post("/api/categories", authenticateAdmin, async (req, res) => {
     try {
-      const { name, description, image } = req.body;
+      const { name, description, icon } = req.body;
       const id = 'c' + Date.now();
       await pool.query(
-        'INSERT INTO categories (id, name, description, image) VALUES ($1, $2, $3, $4)',
-        [id, name, description, image]
+        'INSERT INTO categories (id, name, description, icon) VALUES ($1, $2, $3, $4)',
+        [id, name, description, icon]
       );
       res.json({ id });
     } catch (err) {
+      console.error("POST /api/categories error:", err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -393,13 +396,14 @@ async function startServer() {
   app.put("/api/categories/:id", authenticateAdmin, async (req, res) => {
     try {
       const { id } = req.params;
-      const { name, description, image } = req.body;
+      const { name, description, icon } = req.body;
       await pool.query(
-        'UPDATE categories SET name = $1, description = $2, image = $3 WHERE id = $4',
-        [name, description, image, id]
+        'UPDATE categories SET name = $1, description = $2, icon = $3 WHERE id = $4',
+        [name, description, icon, id]
       );
       res.json({ message: 'Category updated' });
     } catch (err) {
+      console.error("PUT /api/categories error:", err);
       res.status(500).json({ error: 'Internal server error' });
     }
   });
