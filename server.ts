@@ -126,10 +126,13 @@ async function initializeDatabase() {
   }
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
+// Export the app for Vercel
+export default app;
+
+async function startServer() {
   console.log("Starting server in mode:", process.env.NODE_ENV);
   console.log("Current working directory:", process.cwd());
 
@@ -146,7 +149,12 @@ async function startServer() {
   app.get("/api/health", async (req, res) => {
     try {
       const dbCheck = await pool.query("SELECT 1");
-      res.json({ status: "ok", db: "connected", timestamp: new Date().toISOString() });
+      res.json({ 
+        status: "ok", 
+        db: "connected", 
+        mode: process.env.NODE_ENV,
+        timestamp: new Date().toISOString() 
+      });
     } catch (err) {
       console.error("Health check DB error:", err);
       res.status(500).json({ status: "error", message: "Database connection failed", error: String(err) });
@@ -676,14 +684,24 @@ async function startServer() {
     });
   }
 
-  // Start listening immediately
-  app.listen(Number(PORT), "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    // Initialize DB after starting server
-    initializeDatabase().catch(err => {
-      console.error("Delayed database initialization failed:", err);
+  // Start listening only if not on Vercel
+  if (!process.env.VERCEL) {
+    app.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+      // Initialize DB after starting server
+      initializeDatabase().catch(err => {
+        console.error("Delayed database initialization failed:", err);
+      });
     });
-  });
+  } else {
+    // On Vercel, we don't call app.listen()
+    // but we still need to initialize the DB
+    console.log("Vercel mode: Database initialization starting...");
+    initializeDatabase().catch(err => {
+      console.error("Vercel database initialization failed:", err);
+    });
+  }
 }
 
+// Start the server setup
 startServer();
