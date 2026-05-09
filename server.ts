@@ -6,15 +6,21 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cors from "cors";
 
+// Neon Connection String Handling
 const neonUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
-const envDbUrl = process.env.DATABASE_URL;
+const envDbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 const connectionString = (envDbUrl && envDbUrl.startsWith('postgres')) ? envDbUrl : neonUrl;
+
+console.log("Connecting to DB:", connectionString.split('@')[1] || "fallback");
 
 const pool = new Pool({
   connectionString,
   max: 10,
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  connectionTimeoutMillis: 10000,
+  ssl: {
+    rejectUnauthorized: false
+  }
 });
 
 pool.on('error', (err) => {
@@ -23,8 +29,10 @@ pool.on('error', (err) => {
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 async function initializeDatabase() {
+  console.log("Initializing database...");
   const client = await pool.connect();
   try {
+    await client.query('BEGIN');
     await client.query(`
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -38,10 +46,16 @@ async function initializeDatabase() {
         shipping_city TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-      
-      -- Ensure admin user
-      UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com';
-      
+    `);
+    
+    // Migrations for existing tables
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user'`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100)`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_address TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_phone TEXT`);
+    await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_city TEXT`);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS categories (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -49,9 +63,10 @@ async function initializeDatabase() {
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+    `);
+    await client.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100)`);
 
-      ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100);
-      
+    await client.query(`
       CREATE TABLE IF NOT EXISTS products (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -64,11 +79,10 @@ async function initializeDatabase() {
         rating DECIMAL(3, 1),
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-      
-      -- Ensure sold_count exists and is initialized
-      ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0;
-      UPDATE products SET sold_count = 0 WHERE sold_count IS NULL;
-
+    `);
+    await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0`);
+    
+    await client.query(`
       CREATE TABLE IF NOT EXISTS orders (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID REFERENCES users(id),
@@ -79,17 +93,9 @@ async function initializeDatabase() {
         shipping_city TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
-      
-      -- Ensure 'total' column exists (migration helper if it was named total_amount)
-      DO $$ 
-      BEGIN 
-        IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='orders' AND column_name='total_amount') THEN
-          ALTER TABLE orders RENAME COLUMN total_amount TO total;
-        END IF;
-      END $$;
-      
-      CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
-      
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS order_items (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         order_id UUID REFERENCES orders(id),
@@ -97,31 +103,46 @@ async function initializeDatabase() {
         quantity INTEGER NOT NULL,
         price DECIMAL(10, 2) NOT NULL
       );
-      
-      CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+    `);
 
+    await client.query(`
       CREATE TABLE IF NOT EXISTS wishlist (
         user_id UUID REFERENCES users(id),
         product_id VARCHAR(255) REFERENCES products(id),
         PRIMARY KEY (user_id, product_id)
       );
-      
-      -- Seed DB if empty
+    `);
+
+    // Ensure admin role for known email
+    await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`);
+
+    // Seed Categories
+    await client.query(`
       INSERT INTO categories (id, name, icon, description)
-      SELECT '1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'
-      WHERE NOT EXISTS (SELECT 1 FROM categories);
+      SELECT '1', 'Electronics', 'Smartphone', 'Tech gadgets'
+      WHERE NOT EXISTS (SELECT 1 FROM categories WHERE id = '1');
       
       INSERT INTO categories (id, name, icon, description)
       SELECT '2', 'Clothing', 'Shirt', 'Fashionable clothes'
       WHERE NOT EXISTS (SELECT 1 FROM categories WHERE id = '2');
-      
-      INSERT INTO products (id, name, description, price, category, images, stock, rating)
-      SELECT 'p1', 'Wireless Headphones', 'Premium wireless headphones.', 299.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&q=80'], 15, 4.8
-      WHERE NOT EXISTS (SELECT 1 FROM products LIMIT 1);
     `);
+
+    // Seed first product if none exist
+    const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
+    if (prodCheck.rows.length === 0) {
+      console.log("Seeding initial products...");
+      await client.query(`
+        INSERT INTO products (id, name, description, price, category, images, stock, rating)
+        VALUES ('p1', 'Wireless Headphones', 'Premium sound quality.', 299.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=500&q=80'], 20, 4.8);
+      `);
+    }
+
+    await client.query('COMMIT');
     console.log("Database initialized successfully");
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error("Error initializing database:", err);
+    throw err;
   } finally {
     client.release();
   }
@@ -168,12 +189,23 @@ app.get("/api/health", async (req, res) => {
       res.json({ 
         status: "ok", 
         db: "connected", 
+        vercel: !!process.env.VERCEL,
         mode: process.env.NODE_ENV,
         timestamp: new Date().toISOString() 
       });
     } catch (err) {
       console.error("Health check DB error:", err);
       res.status(500).json({ status: "error", message: "Database connection failed", error: String(err) });
+    }
+  });
+
+  app.get("/api/debug-db", async (req, res) => {
+    try {
+      const tables = await pool.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'");
+      const productCount = await pool.query("SELECT count(*) FROM products");
+      res.json({ tables: tables.rows, products: productCount.rows[0].count });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
     }
   });
 
