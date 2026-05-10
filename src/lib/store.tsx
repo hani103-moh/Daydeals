@@ -123,9 +123,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         const data = await res.json();
         console.log('Categories fetched:', data);
         setCategories(data);
-      } else if (res.status === 503 && retryCount < 5) {
-        console.warn(`Database is still initializing (503) for categories. Retrying in 3s... (Attempt ${retryCount + 1}/5)`);
-        setTimeout(() => fetchCategories(retryCount + 1), 3000);
+      } else if (res.status === 503 && retryCount < 10) {
+        console.warn(`Database is still initializing (503) for categories. Retrying in 1s... (Attempt ${retryCount + 1}/10)`);
+        setTimeout(() => fetchCategories(retryCount + 1), 1000);
       } else {
         const text = await res.text();
         console.error('Fetch categories failed:', text);
@@ -152,10 +152,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         console.log('Products fetched:', data.length);
         setProducts(data);
         setDbLoading(false);
-      } else if (res.status === 503 && retryCount < 5) {
+      } else if (res.status === 503 && retryCount < 10) {
         // DB is likely still initializing
-        console.warn(`Database is still initializing (503). Retrying in 3s... (Attempt ${retryCount + 1}/5)`);
-        setTimeout(() => fetchProducts(full, retryCount + 1), 3000);
+        console.warn(`Database is still initializing (503). Retrying in 1s... (Attempt ${retryCount + 1}/10)`);
+        setTimeout(() => fetchProducts(full, retryCount + 1), 1000);
       } else {
         const text = await res.text();
         console.error('Fetch products failed:', text);

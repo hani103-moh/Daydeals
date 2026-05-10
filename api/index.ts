@@ -29,25 +29,37 @@ function getPool() {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
+// Eagerly start DB connection to wake up Neon compute node
+getPool().connect()
+  .then(client => {
+    console.log("Eager DB connection established");
+    client.release();
+    ensureInitialized().catch(e => console.error("Background init failed:", e));
+  })
+  .catch(err => console.warn("Eager DB connection warming failed (safe to ignore):", err.message));
+
 async function initializeDatabase() {
   const pool = getPool();
-  
-  // 1. FAST CHECK: If users table exists, we likely already initialized
   let client;
+  
   try {
     client = await pool.connect();
-    const tableCheck = await client.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1");
     
-    if (tableCheck.rows.length > 0) {
-      console.log("Database tables already exist. Schema verified.");
+    // 1. FAST CHECK: Faster than information_schema
+    const tableCheck = await client.query("SELECT to_regclass('public.users')");
+    if (tableCheck.rows[0].to_regclass) {
+      console.log("Database tables verified via regclass.");
       isInitialized = true;
       return;
     }
 
     console.log("Performing full database initialization...");
     await client.query('BEGIN');
+    
+    // Create everything in one go
     await client.query(`
       CREATE EXTENSION IF NOT EXISTS pgcrypto;
+      
       CREATE TABLE IF NOT EXISTS users (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         email VARCHAR(255) UNIQUE NOT NULL,
@@ -64,6 +76,7 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+
       CREATE TABLE IF NOT EXISTS categories (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -71,6 +84,7 @@ async function initializeDatabase() {
         description TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+
       CREATE TABLE IF NOT EXISTS products (
         id VARCHAR(255) PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
@@ -88,6 +102,7 @@ async function initializeDatabase() {
       );
       CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
       CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);
+
       CREATE TABLE IF NOT EXISTS orders (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID REFERENCES users(id),
@@ -100,6 +115,7 @@ async function initializeDatabase() {
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
       CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
+
       CREATE TABLE IF NOT EXISTS order_items (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         order_id UUID REFERENCES orders(id),
@@ -108,6 +124,7 @@ async function initializeDatabase() {
         price DECIMAL(10, 2) NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+
       CREATE TABLE IF NOT EXISTS wishlist (
         user_id UUID REFERENCES users(id),
         product_id VARCHAR(255) REFERENCES products(id),
@@ -115,12 +132,12 @@ async function initializeDatabase() {
       );
     `);
     
-    await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`);
-
     // SEEDING
-    const catCheck = await client.query('SELECT 1 FROM categories LIMIT 1');
-    if (catCheck.rows.length === 0) {
-      console.log("Seeding initial categories...");
+    const seedCheck = await client.query('SELECT (SELECT COUNT(*) FROM categories) as cat_count, (SELECT COUNT(*) FROM products) as prod_count');
+    const { cat_count, prod_count } = seedCheck.rows[0];
+
+    if (parseInt(cat_count) === 0) {
+      console.log("Seeding categories...");
       await client.query(`
         INSERT INTO categories (id, name, icon, description) VALUES
         ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
@@ -130,9 +147,8 @@ async function initializeDatabase() {
       `);
     }
 
-    const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
-    if (prodCheck.rows.length === 0) {
-      console.log("Seeding initial products...");
+    if (parseInt(prod_count) === 0) {
+      console.log("Seeding products...");
       await client.query(`
         INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
         ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
@@ -142,8 +158,10 @@ async function initializeDatabase() {
       `);
     }
 
+    await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`);
     await client.query('COMMIT');
-    console.log("Database initialized successfully");
+    
+    console.log("Database initialization completed.");
     isInitialized = true;
   } catch (err) {
     if (client) await client.query('ROLLBACK');
