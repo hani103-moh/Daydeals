@@ -32,148 +32,19 @@ const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 async function initializeDatabase() {
   const pool = getPool();
   
-  // 1. FAST CHECK: If users table exists, skip full init but still ensure other tables exist
-  try {
-    const tableCheck = await pool.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1");
-    
-    // Always ensure EXTENSION and TABLES exist
-    let client;
-    try {
-      client = await pool.connect();
-      await client.query(`CREATE EXTENSION IF NOT EXISTS pgcrypto;`);
-      
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS users (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          email VARCHAR(255) UNIQUE NOT NULL,
-          password_hash VARCHAR(255) NOT NULL,
-          display_name VARCHAR(100),
-          role VARCHAR(50) DEFAULT 'user',
-          photo_url TEXT,
-          shipping_address TEXT,
-          shipping_phone TEXT,
-          shipping_city TEXT,
-          area TEXT,
-          reset_token TEXT,
-          reset_token_expires TIMESTAMP,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS categories (
-          id VARCHAR(255) PRIMARY KEY,
-          name VARCHAR(255) NOT NULL,
-          icon VARCHAR(100),
-          description TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS products (
-          id VARCHAR(255) PRIMARY KEY,
-          name VARCHAR(255) NOT NULL,
-          description TEXT,
-          price DECIMAL(10, 2) NOT NULL,
-          category VARCHAR(100),
-          images TEXT[],
-          stock INTEGER DEFAULT 0,
-          sold_count INTEGER DEFAULT 0,
-          rating DECIMAL(3, 1),
-          reviews_count INTEGER DEFAULT 0,
-          tags TEXT[] DEFAULT '{}',
-          is_featured BOOLEAN DEFAULT false,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS orders (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          user_id UUID REFERENCES users(id),
-          total DECIMAL(10, 2) NOT NULL,
-          status VARCHAR(50) DEFAULT 'pending',
-          shipping_address TEXT,
-          shipping_phone TEXT,
-          shipping_city TEXT,
-          area TEXT,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-        CREATE TABLE IF NOT EXISTS order_items (
-          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-          order_id UUID REFERENCES orders(id),
-          product_id VARCHAR(255) REFERENCES products(id),
-          quantity INTEGER NOT NULL,
-          price DECIMAL(10, 2) NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS wishlist (
-          user_id UUID REFERENCES users(id),
-          product_id VARCHAR(255) REFERENCES products(id),
-          PRIMARY KEY (user_id, product_id)
-        );
-      `);
-
-      // Run migrations (ALTER TABLE ... IF NOT EXISTS)
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS display_name VARCHAR(100);`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(50) DEFAULT 'user';`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS photo_url TEXT;`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_address TEXT;`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_phone TEXT;`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS shipping_city TEXT;`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS area TEXT;`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token TEXT;`);
-      await client.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS reset_token_expires TIMESTAMP;`);
-      await client.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS icon VARCHAR(100);`);
-      await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sold_count INTEGER DEFAULT 0;`);
-      await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS reviews_count INTEGER DEFAULT 0;`);
-      await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}';`);
-      await client.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false;`);
-      await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_phone TEXT;`);
-      await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_city TEXT;`);
-      await client.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS area TEXT;`);
-      
-      await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com';`);
-      
-      // Performance Indexes
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);`);
-      await client.query(`CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);`);
-
-      // Check if seeding is needed
-      const catCheck = await client.query('SELECT 1 FROM categories LIMIT 1');
-      if (catCheck.rows.length === 0) {
-        console.log("Seeding categories...");
-        await client.query(`
-          INSERT INTO categories (id, name, icon, description) VALUES
-          ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
-          ('c2', 'Clothing', 'Shirt', 'Modern fashion for everyone'),
-          ('c3', 'Home', 'Home', 'Essential household items'),
-          ('c4', 'Beauty', 'Sparkles', 'Cosmetics and skincare')
-        `);
-      }
-
-      const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
-      if (prodCheck.rows.length === 0) {
-        console.log("Seeding products...");
-        await client.query(`
-          INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
-          ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
-          ('p2', 'Minimalist Watch', 'Elegant design for every occasion.', 129.50, 'Clothing', ARRAY['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&q=80'], 100, 4.5, 89, ARRAY['fashion', 'accessory'], false),
-          ('p3', 'Smart Speaker', 'Voice-controlled assistant with clear audio.', 79.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1589492477829-5e65395b66cc?w=800&q=80'], 30, 4.2, 56, ARRAY['smart-home', 'audio'], true),
-          ('p4', 'Running Shoes', 'Lightweight and durable for all terrains.', 89.00, 'Clothing', ARRAY['https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80'], 75, 4.7, 210, ARRAY['sport', 'running', 'fitness'], false)
-        `);
-      }
-      
-      console.log("Database schema check and seeding completed successfully");
-    } catch (e) {
-      console.error("Database initialization error:", e);
-      throw e;
-    } finally {
-      if (client) client.release();
-    }
-    return;
-  } catch (e) {
-    console.log("Fast check failed, something is wrong with the connection or schema:", e);
-  }
-
-  console.log("Performing full database initialization...");
+  // 1. FAST CHECK: If users table exists, we likely already initialized
   let client;
   try {
     client = await pool.connect();
+    const tableCheck = await client.query("SELECT 1 FROM information_schema.tables WHERE table_name = 'users' LIMIT 1");
+    
+    if (tableCheck.rows.length > 0) {
+      console.log("Database tables already exist. Schema verified.");
+      isInitialized = true;
+      return;
+    }
+
+    console.log("Performing full database initialization...");
     await client.query('BEGIN');
     await client.query(`
       CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -215,6 +86,8 @@ async function initializeDatabase() {
         is_featured BOOLEAN DEFAULT false,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE INDEX IF NOT EXISTS idx_products_category ON products(category);
+      CREATE INDEX IF NOT EXISTS idx_products_created_at ON products(created_at DESC);
       CREATE TABLE IF NOT EXISTS orders (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         user_id UUID REFERENCES users(id),
@@ -226,6 +99,7 @@ async function initializeDatabase() {
         area TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      CREATE INDEX IF NOT EXISTS idx_orders_user_id ON orders(user_id);
       CREATE TABLE IF NOT EXISTS order_items (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         order_id UUID REFERENCES orders(id),
@@ -233,6 +107,7 @@ async function initializeDatabase() {
         quantity INTEGER NOT NULL,
         price DECIMAL(10, 2) NOT NULL
       );
+      CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
       CREATE TABLE IF NOT EXISTS wishlist (
         user_id UUID REFERENCES users(id),
         product_id VARCHAR(255) REFERENCES products(id),
@@ -245,6 +120,7 @@ async function initializeDatabase() {
     // SEEDING
     const catCheck = await client.query('SELECT 1 FROM categories LIMIT 1');
     if (catCheck.rows.length === 0) {
+      console.log("Seeding initial categories...");
       await client.query(`
         INSERT INTO categories (id, name, icon, description) VALUES
         ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
@@ -256,6 +132,7 @@ async function initializeDatabase() {
 
     const prodCheck = await client.query('SELECT 1 FROM products LIMIT 1');
     if (prodCheck.rows.length === 0) {
+      console.log("Seeding initial products...");
       await client.query(`
         INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
         ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
@@ -267,9 +144,10 @@ async function initializeDatabase() {
 
     await client.query('COMMIT');
     console.log("Database initialized successfully");
+    isInitialized = true;
   } catch (err) {
     if (client) await client.query('ROLLBACK');
-    console.error("Error initializing database:", err);
+    console.error("Database initialization error:", err);
     throw err;
   } finally {
     if (client) client.release();
@@ -282,15 +160,9 @@ let initPromise: Promise<void> | null = null;
 
 async function ensureInitialized() {
   if (isInitialized) return;
-  const start = Date.now();
   if (!initPromise) {
-    console.log("Database not initialized. Starting initialization sequence...");
-    initPromise = initializeDatabase().then(() => {
-      isInitialized = true;
-      console.log(`Database initialization completed in ${Date.now() - start}ms`);
-    }).catch(err => {
+    initPromise = initializeDatabase().catch(err => {
       initPromise = null;
-      console.error(`Database initialization FAILED after ${Date.now() - start}ms:`, err);
       throw err;
     });
   }
@@ -469,9 +341,12 @@ app.post("/api/auth/forgot-password", async (req, res) => {
 
     // MOCK EMAIL: In a real app, you'd use SendGrid/Resend/etc.
     console.log(`[PASS_RESET] Mock email sent to ${lowerEmail}. Token: ${token}`);
-    console.log(`[PASS_RESET] Reset URL: http://localhost:3000/reset-password?token=${token}`);
-
-    res.json({ message: 'If an account with that email exists, we have sent a reset link (Internal: Check server logs for mock link)' });
+    
+    // For demo purposes, we'll return the token so the UI can show the link
+    res.json({ 
+      message: 'If an account with that email exists, we have sent a reset link.',
+      resetLink: `/reset-password?token=${token}` 
+    });
   } catch (err: any) {
     console.error("Forgot password error:", err);
     res.status(500).json({ error: err.message });

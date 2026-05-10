@@ -16,7 +16,8 @@ import {
   Home as HomeIcon,
   Scissors,
   MoreHorizontal,
-  Smartphone
+  Smartphone,
+  Loader2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
@@ -172,10 +173,26 @@ const Home = () => {
         </div>
         
         {dbLoading && products.length === 0 ? (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-              <div key={i} className="aspect-[3/4] rounded-2xl glass animate-pulse" />
-            ))}
+          <div className="space-y-8">
+            <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
+              <div className="relative">
+                <Loader2 className="w-12 h-12 text-primary animate-spin" />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Zap className="w-4 h-4 text-primary" />
+                </div>
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-bold uppercase tracking-tight">Waking up Merkato...</h3>
+                <p className="text-muted-foreground text-sm max-w-xs mx-auto italic">
+                  Our database is warming up. This usually takes a few seconds on the first visit.
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 md:gap-4 opacity-20 pointer-events-none">
+              {[1, 2, 3, 4, 5, 6].map(i => (
+                <div key={i} className="aspect-[3/4] rounded-2xl glass animate-pulse" />
+              ))}
+            </div>
           </div>
         ) : (
           <>

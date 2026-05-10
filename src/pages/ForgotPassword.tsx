@@ -9,6 +9,7 @@ export default function ForgotPassword() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [resetLink, setResetLink] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -16,6 +17,7 @@ export default function ForgotPassword() {
     setLoading(true);
     setError(null);
     setMessage(null);
+    setResetLink(null);
 
     try {
       const res = await fetch('/api/auth/forgot-password', {
@@ -26,6 +28,9 @@ export default function ForgotPassword() {
       const data = await res.json();
       if (res.ok) {
         setMessage(data.message);
+        if (data.resetLink) {
+          setResetLink(data.resetLink);
+        }
       } else {
         setError(data.error);
       }
@@ -58,10 +63,22 @@ export default function ForgotPassword() {
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="p-4 rounded-2xl bg-green-500/10 border border-green-500/20 text-green-500 flex items-start gap-3"
+            className="space-y-4"
           >
-            <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
-            <p className="text-sm font-medium">{message}</p>
+            <div className="p-4 rounded-2xl bg-green-500/10 border border-green-500/20 text-green-500 flex items-start gap-3">
+              <CheckCircle2 className="w-5 h-5 shrink-0 mt-0.5" />
+              <p className="text-sm font-medium">{message}</p>
+            </div>
+            
+            {resetLink && (
+              <div className="p-6 rounded-2xl bg-primary/5 border border-primary/10 space-y-3">
+                <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Demo: Direct Reset Link</p>
+                <Button asChild className="w-full rounded-xl">
+                  <Link to={resetLink}>Reset Password Now</Link>
+                </Button>
+                <p className="text-[10px] text-center text-muted-foreground">In a production app, this would be sent via email.</p>
+              </div>
+            )}
           </motion.div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-6">
