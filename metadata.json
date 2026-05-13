@@ -1,5 +1,5 @@
 {
-  "name": "DayDeals (DD)",
+  "name": "hub_deals",
   "description": "A high-end glassmorphism e-commerce platform featuring a sleek storefront, admin dashboard, product management, and seamless checkout experience.",
   "requestFramePermissions": [
     "camera",

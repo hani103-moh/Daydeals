@@ -1,4 +1,5 @@
 import "dotenv/config";
+console.log("[RUNTIME] api/index.ts loading...");
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -7,6 +8,15 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import cors from "cors";
 import crypto from "crypto";
+import { fileURLToPath } from 'url';
+
+// Safety nets
+process.on('uncaughtException', (err) => {
+  console.error('[CRITICAL-ERROR] Uncaught:', err);
+});
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[CRITICAL-ERROR] Unhandled Rejection at:', promise, 'reason:', reason);
+});
 
 // Neon Connection String Handling
 const neonUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
@@ -959,34 +969,36 @@ const PORT = process.env.PORT || 3000;
 async function startServer() {
   const resolvedDistPath = path.resolve(process.cwd(), 'dist');
   const hasDist = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
-  
-  console.log(`[STARTUP] Resolved Dist Path: ${resolvedDistPath}`);
-  console.log(`[STARTUP] Has Build Output: ${hasDist}`);
-  console.log(`[STARTUP] NODE_ENV: ${process.env.NODE_ENV}`);
+  const isProduction = process.env.NODE_ENV === 'production' || hasDist;
+
+  console.log(`\n--- SERVER STARTUP SEQUENCE ---`);
+  console.log(`[BOOT] Time: ${new Date().toISOString()}`);
+  console.log(`[BOOT] CWD: ${process.cwd()}`);
+  console.log(`[BOOT] Dist Path: ${resolvedDistPath} (Exists: ${hasDist})`);
+  console.log(`[BOOT] Mode: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
+  console.log(`[BOOT] PORT Required: ${process.env.PORT || 3000}`);
   
   try {
     // 1. Database Init in background
-    initializeDatabase().catch(err => console.error("[DB] Background init error:", err));
+    initializeDatabase().catch(err => console.error("[DB] Slow init error (expected if Neon is cold):", err.message));
 
-    // 2. Integration with Vite (Dev) or Static (Prod)
-    const isProdMode = process.env.NODE_ENV === "production" || hasDist;
-    
-    if (!isProdMode) {
+    // 2. Integration logic
+    if (!isProduction) {
       try {
-        console.log("[STARTUP] Starting Vite in middleware mode...");
+        console.log("[BOOT] Attaching Vite middleware...");
         const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
           server: { middlewareMode: true },
           appType: "spa",
         });
         app.use(vite.middlewares);
-        console.log("[STARTUP] Vite middleware ready.");
+        console.log("[BOOT] Vite ready.");
       } catch (e) {
-        console.error("[STARTUP] Vite initialization failed:", e);
+        console.error("[BOOT] Vite init failed, falling back to static:", e);
         if (hasDist) setupStaticServing(resolvedDistPath);
       }
     } else {
-      console.log("[STARTUP] Serving static files from dist.");
+      console.log("[BOOT] Setup static serving for production...");
       setupStaticServing(resolvedDistPath);
     }
 
@@ -1005,30 +1017,32 @@ async function startServer() {
       // Try dist/index.html
       const indexPath = path.join(resolvedDistPath, 'index.html');
       if (fs.existsSync(indexPath)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         return res.sendFile(indexPath);
       }
 
       // Dev Fallback or Error
-      if (process.env.NODE_ENV !== "production") {
+      if (!isProduction) {
         const rootIndex = path.resolve(process.cwd(), 'index.html');
         if (fs.existsSync(rootIndex)) {
           return res.status(200).sendFile(rootIndex);
         }
       }
       
-      res.status(500).send("Application not built. Please run 'npm run build' first.");
+      res.status(500).send("Application not built. Please run 'npm run build' first. Checked path: " + indexPath);
     });
 
-    const finalPort = Number(PORT);
+    const finalPort = parseInt(process.env.PORT || '3000', 10);
     app.listen(finalPort, "0.0.0.0", () => {
-      console.log(`\n-----------------------------------------`);
-      console.log(`🚀 SERVER READY ON PORT ${finalPort}`);
-      console.log(`🌍 URL: http://localhost:${finalPort}`);
-      console.log(`-----------------------------------------\n`);
+      console.log(`\n🚀 hub_deals SERVER ONLINE`);
+      console.log(`✅ PORT: ${finalPort}`);
+      console.log(`✅ STATUS: Ready for connections`);
+      console.log(`-----------------------------------\n`);
     });
   } catch (err) {
-    console.error("[CRITICAL] Startup failed:", err);
-    try { app.listen(Number(PORT), "0.0.0.0"); } catch (e) {}
+    console.error("[BOOT] CRITICAL FAILURE:", err);
+    // Try to listen anyway
+    try { app.listen(Number(process.env.PORT || 3000), "0.0.0.0"); } catch (e) {}
   }
 }
 
