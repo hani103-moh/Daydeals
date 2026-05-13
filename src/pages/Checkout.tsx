@@ -56,7 +56,11 @@ const Checkout = () => {
 
     try {
       const orderData = {
-        items: cart,
+        items: cart.map(item => ({
+          id: item.id,
+          quantity: item.quantity,
+          price: item.price
+        })),
         total,
         shippingAddress: {
           fullName: formData.fullName,

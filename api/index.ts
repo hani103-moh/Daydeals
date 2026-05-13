@@ -18,9 +18,10 @@ function getPool() {
     console.log("Initializing Postgres Pool with string:", connectionString.split('@')[1] || 'default');
     _pool = new Pool({
       connectionString,
-      max: 20, 
+      max: 30, 
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 30000, // Increased to 30s for slow cold starts
+      connectionTimeoutMillis: 30000, 
+      statement_timeout: 60000, // 60s max per query to prevent hung pool
       ssl: { rejectUnauthorized: false }
     });
     _pool.on('error', (err) => {
@@ -202,8 +203,14 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use(async (req, res, next) => {
   const start = Date.now();
   
+  // Track long running requests in progress
+  const longRunningTimer = setTimeout(() => {
+    console.warn(`[HANG-WATCH] Request ${req.method} ${req.url} has been running for 5s...`);
+  }, 5000);
+
   if (req.url.startsWith('/api')) {
     if (req.url === '/api/health' || req.url === '/api/init-db') {
+      clearTimeout(longRunningTimer);
       return next();
     }
 
@@ -220,6 +227,7 @@ app.use(async (req, res, next) => {
   
   // Track response completion
   res.on('finish', () => {
+    clearTimeout(longRunningTimer);
     if (req.url.startsWith('/api')) {
       const duration = Date.now() - start;
       if (duration > 3000) {
@@ -228,6 +236,10 @@ app.use(async (req, res, next) => {
         console.log(`[PERF] SLOW: ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
       }
     }
+  });
+
+  res.on('close', () => {
+    clearTimeout(longRunningTimer);
   });
   
   next();
@@ -524,9 +536,22 @@ app.put("/api/auth/profile", authenticateToken, async (req: any, res: any) => {
 // Products Routes
 app.get("/api/products", async (req, res) => {
   const start = Date.now();
+  const full = req.query.full === 'true';
   try {
-    const result = await getPool().query("SELECT * FROM products ORDER BY created_at DESC");
-    console.log(`Fetch products took ${Date.now() - start}ms - found ${result.rows.length} items`);
+    // Optimization: If NOT full, we only fetch the first image to keep payload small
+    let query;
+    if (full) {
+      query = "SELECT * FROM products ORDER BY created_at DESC";
+    } else {
+      query = "SELECT id, name, price, category, images[1:1] as images, stock, sold_count, rating, reviews_count, is_featured, created_at, tags FROM products ORDER BY created_at DESC";
+    }
+    
+    const result = await getPool().query(query);
+    const duration = Date.now() - start;
+    if (duration > 2000) {
+      console.warn(`[PERF] SLOW DB QUERY: GET /api/products (${full ? 'full' : 'compact'}) took ${duration}ms`);
+    }
+    
     const products = result.rows.map(row => ({
       ...row,
       price: Number(row.price),
@@ -541,6 +566,7 @@ app.get("/api/products", async (req, res) => {
     }));
     res.json(products);
   } catch (err: any) {
+    console.error("Fetch products error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -689,7 +715,7 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
                COALESCE(json_agg(item_details) FILTER (WHERE item_details.id IS NOT NULL), '[]'::json) as items
         FROM orders o
         LEFT JOIN (
-          SELECT oi.*, p.name, p.images
+          SELECT oi.*, p.name, p.images[1:1] as images
           FROM order_items oi
           JOIN products p ON oi.product_id = p.id
         ) AS item_details ON o.id = item_details.order_id
@@ -702,7 +728,7 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
                COALESCE(json_agg(item_details) FILTER (WHERE item_details.id IS NOT NULL), '[]'::json) as items
         FROM orders o
         LEFT JOIN (
-          SELECT oi.*, p.name, p.images
+          SELECT oi.*, p.name, p.images[1:1] as images
           FROM order_items oi
           JOIN products p ON oi.product_id = p.id
         ) AS item_details ON o.id = item_details.order_id
@@ -738,61 +764,68 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
 
 app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
   const start = Date.now();
-  const client = await getPool().connect();
+  console.log(`[ORDER] POST /api/orders started for user ${req.user.id}`);
+  let client;
   try {
     const userId = req.user.id;
     const { items, total, shippingAddress } = req.body;
-    console.log(`Starting order creation for user ${userId} with ${items?.length} items...`);
     
+    if (!items || !items.length) {
+      console.warn(`[ORDER] Empty items for user ${userId}`);
+      return res.status(400).json({ error: 'Cart is empty' });
+    }
+
+    console.log(`[ORDER] Order data: ${items.length} items, total: ${total}`);
+    
+    client = await getPool().connect();
+    console.log(`[ORDER] DB Client acquired in ${Date.now() - start}ms`);
+
     await client.query('BEGIN');
     const orderRes = await client.query(
       'INSERT INTO orders (user_id, total, shipping_address, shipping_phone, shipping_city, area) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
       [userId, total, JSON.stringify(shippingAddress), shippingAddress.phone || '', shippingAddress.city || '', shippingAddress.area || '']
     );
     const orderId = orderRes.rows[0].id;
-    console.log(`Order record created: ${orderId}. Inserting ${items.length} items...`);
+    console.log(`[ORDER] Order record created: ${orderId}`);
     
-    if (items.length > 0) {
-      console.log(`Inserting items for order ${orderId}...`);
-      const values: any[] = [];
-      const placeholders = items.map((item: any, i: number) => {
-        const offset = i * 4;
-        values.push(orderId, item.id, item.quantity, item.price);
-        return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
-      }).join(', ');
-      
-      await client.query(`INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ${placeholders}`, values);
-    }
+    console.log(`[ORDER] Inserting ${items.length} items...`);
+    const values: any[] = [];
+    const placeholders = items.map((item: any, i: number) => {
+      const offset = i * 4;
+      values.push(orderId, item.id, item.quantity, item.price);
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
+    }).join(', ');
+    
+    await client.query(`INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ${placeholders}`, values);
     
     await client.query('COMMIT');
-    console.log(`Order ${orderId} committed successfully in ${Date.now() - start}ms`);
+    const duration = Date.now() - start;
+    console.log(`[ORDER] Order ${orderId} committed successfully in ${duration}ms`);
     
-    // Notify via Telegram - move AFTER response to ensure client is not waiting
     res.json({ id: orderId });
 
-    // Handle background notification
-    const backgroundNotify = async () => {
-      let firstItemImage = null;
-      if (items && items.length > 0) {
-        try {
-          const prodRes = await getPool().query('SELECT images FROM products WHERE id = $1', [items[0].id]);
-          if (prodRes.rows.length > 0 && prodRes.rows[0].images && prodRes.rows[0].images.length > 0) {
-            firstItemImage = prodRes.rows[0].images[0];
-          }
-        } catch (e) {
-          console.warn("Background image fetch failed:", e);
+    // Background notification
+    (async () => {
+      try {
+        let firstItemImage = null;
+        const prodRes = await getPool().query('SELECT images[1:1] as images FROM products WHERE id = $1', [items[0].id]);
+        if (prodRes.rows.length > 0 && prodRes.rows[0].images?.length > 0) {
+          firstItemImage = prodRes.rows[0].images[0];
         }
+        await sendTelegramNotification(orderId, total, items.length, 'NEW', firstItemImage);
+      } catch (err) {
+        console.error("[ORDER] Background notify failed:", err);
       }
-      sendTelegramNotification(orderId, total, items.length, 'NEW', firstItemImage);
-    };
+    })();
     
-    backgroundNotify();
   } catch (err: any) {
-    if (client) await client.query('ROLLBACK');
-    console.error("Order creation error:", err);
-    res.status(500).json({ error: err.message });
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch (e) { console.error("[ORDER] Rollback failed:", e); }
+    }
+    console.error(`[ORDER] FAILED for user ${req.user.id}:`, err);
+    res.status(500).json({ error: err.message || 'Failed to process order' });
   } finally {
-    client.release();
+    if (client) client.release();
   }
 });
 

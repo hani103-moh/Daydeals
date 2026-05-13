@@ -51,7 +51,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     setOrdersCount(activeOrders.length);
   }, [orders]);
 
-  const fetchWithTimeout = async (url: string, options: any = {}, timeout = 60000) => {
+  const fetchWithTimeout = async (url: string, options: any = {}, timeout = 120000) => {
     const controller = new AbortController();
     const id = setTimeout(() => controller.abort(), timeout);
     try {
@@ -146,7 +146,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   const fetchProducts = async (full: boolean = false, retryCount = 0) => {
     try {
       console.log('Fetching products...', full ? '(full)' : '');
-      const res = await fetchWithTimeout(`/api/products${full ? '?full=true' : ''}`, {}, 25000); // 25s timeout
+      const res = await fetchWithTimeout(`/api/products${full ? '?full=true' : ''}`, {}, 60000); // 60s timeout
       if (res.ok) {
         const data = await res.json();
         console.log('Products fetched:', data.length);
