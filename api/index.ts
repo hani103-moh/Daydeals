@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { Pool } from "pg";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
@@ -956,72 +957,101 @@ app.post("/api/wishlist", authenticateToken, async (req: any, res: any) => {
 const PORT = process.env.PORT || 3000;
 
 async function startServer() {
+  const resolvedDistPath = path.resolve(process.cwd(), 'dist');
+  const hasDist = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
+  
+  console.log(`[STARTUP] Resolved Dist Path: ${resolvedDistPath}`);
+  console.log(`[STARTUP] Has Build Output: ${hasDist}`);
+  console.log(`[STARTUP] NODE_ENV: ${process.env.NODE_ENV}`);
+  
   try {
     // 1. Database Init in background
-    initializeDatabase().catch(err => console.error("Database initialization failed:", err));
+    initializeDatabase().catch(err => console.error("[DB] Background init error:", err));
 
     // 2. Integration with Vite (Dev) or Static (Prod)
-    if (process.env.NODE_ENV !== "production") {
+    const isProdMode = process.env.NODE_ENV === "production" || hasDist;
+    
+    if (!isProdMode) {
       try {
-        console.log("Starting Vite in middleware mode...");
+        console.log("[STARTUP] Starting Vite in middleware mode...");
         const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
           server: { middlewareMode: true },
           appType: "spa",
         });
         app.use(vite.middlewares);
-        console.log("Vite middleware attached.");
+        console.log("[STARTUP] Vite middleware ready.");
       } catch (e) {
-        console.error("Vite failed, falling back to static:", e);
-        setupStaticServing();
+        console.error("[STARTUP] Vite initialization failed:", e);
+        if (hasDist) setupStaticServing(resolvedDistPath);
       }
     } else {
-      setupStaticServing();
+      console.log("[STARTUP] Serving static files from dist.");
+      setupStaticServing(resolvedDistPath);
     }
 
-    // 3. Final SPA Fallback (Only for non-asset GET requests)
+    // 3. Final SPA Fallback
     app.get('*', (req, res) => {
-      // Don't fallback for API
-      if (req.url.startsWith('/api')) return res.status(404).json({ error: 'API not found' });
+      // API 404
+      if (req.url.startsWith('/api')) {
+        return res.status(404).json({ error: 'API route not found' });
+      }
       
-      // Don't fallback for things that look like assets but reached here
-      if (/\.(js|css|json|png|jpg|jpeg|gif|svg|ico|map|ts|tsx)$/i.test(req.url)) {
-        return res.status(404).send('Not Found');
+      // Asset 404
+      if (/\.(js|css|json|png|jpg|jpeg|gif|svg|ico|map|ts|tsx|woff|woff2|ttf)$/i.test(req.url)) {
+        return res.status(404).send('Resource not found');
       }
 
-      const distPath = path.join(process.cwd(), 'dist');
-      const indexPath = path.join(distPath, 'index.html');
-      
-      res.sendFile(indexPath, (err) => {
-        if (err) {
-          // In development, we can try to serve the root index.html
-          res.status(200).sendFile(path.join(process.cwd(), 'index.html'));
+      // Try dist/index.html
+      const indexPath = path.join(resolvedDistPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
+      }
+
+      // Dev Fallback or Error
+      if (process.env.NODE_ENV !== "production") {
+        const rootIndex = path.resolve(process.cwd(), 'index.html');
+        if (fs.existsSync(rootIndex)) {
+          return res.status(200).sendFile(rootIndex);
         }
-      });
+      }
+      
+      res.status(500).send("Application not built. Please run 'npm run build' first.");
     });
 
-    app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`Server listening on port ${PORT}`);
+    const finalPort = Number(PORT);
+    app.listen(finalPort, "0.0.0.0", () => {
+      console.log(`\n-----------------------------------------`);
+      console.log(`🚀 SERVER READY ON PORT ${finalPort}`);
+      console.log(`🌍 URL: http://localhost:${finalPort}`);
+      console.log(`-----------------------------------------\n`);
     });
   } catch (err) {
-    console.error("Startup error:", err);
-    app.listen(Number(PORT), "0.0.0.0");
+    console.error("[CRITICAL] Startup failed:", err);
+    try { app.listen(Number(PORT), "0.0.0.0"); } catch (e) {}
   }
 }
 
-function setupStaticServing() {
-  const distPath = path.join(process.cwd(), 'dist');
+function setupStaticServing(distPath: string) {
   app.use(express.static(distPath, {
     maxAge: '1d',
-    setHeaders: (res, path) => {
-      if (path.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript');
+    etag: true,
+    index: false, // We'll handle the root via get('*') or express.static will handle /index.html
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith('.js')) {
+        res.setHeader('Content-Type', 'text/javascript');
+      }
+      if (filePath.endsWith('.css')) {
+        res.setHeader('Content-Type', 'text/css');
+      }
+      // Security headers for mobile browsers
+      res.setHeader('X-Content-Type-Options', 'nosniff');
     }
   }));
 }
 
-if (!process.env.VERCEL) {
-  startServer();
-}
+// Always start the server in this container environment 
+startServer();
 
 // Telegram Helper
 async function sendTelegramNotification(details: {
