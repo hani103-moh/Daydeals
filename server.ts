@@ -1,5 +1,5 @@
 import "dotenv/config";
-console.log("[RUNTIME] api/index.ts loading...");
+console.log("[RUNTIME] server.ts loading...");
 import express from "express";
 import path from "path";
 import fs from "fs";
@@ -26,33 +26,22 @@ function getPool() {
   if (!_pool) {
     const envDbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
     const connectionString = (envDbUrl && envDbUrl.startsWith('postgres')) ? envDbUrl : neonUrl;
-    console.log("Initializing Postgres Pool with string:", connectionString.split('@')[1] || 'default');
+    console.log("Initializing Postgres Pool...");
     _pool = new Pool({
       connectionString,
-      max: 30, 
+      max: 20, 
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 30000, 
-      statement_timeout: 60000, // 60s max per query to prevent hung pool
+      connectionTimeoutMillis: 10000, 
       ssl: { rejectUnauthorized: false }
     });
     _pool.on('error', (err) => {
       console.error('Unexpected error on idle DB client:', err);
-      // Don't crash, just log. Pool should recover.
     });
   }
   return _pool;
 }
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
-
-// Eagerly start DB connection to wake up Neon compute node
-getPool().connect()
-  .then(client => {
-    console.log("Eager DB connection established");
-    client.release();
-    ensureInitialized().catch(e => console.error("Background init failed:", e));
-  })
-  .catch(err => console.warn("Eager DB connection warming failed (safe to ignore):", err.message));
 
 async function initializeDatabase() {
   const pool = getPool();
