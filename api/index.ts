@@ -323,14 +323,22 @@ app.post("/api/auth/login", async (req, res) => {
     const wishlistRes = await getPool().query('SELECT product_id FROM wishlist WHERE user_id = $1', [user.id]);
     const wishlist = wishlistRes.rows.map(r => r.product_id);
 
-    const token = jwt.sign({ id: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+    // Ensure master user always has admin role even if DB update hasn't run yet
+    let role = user.role;
+    if (lowerEmail === 'hanichomoh@gmail.com' && role !== 'admin') {
+      role = 'admin';
+      // Silently update in background
+      getPool().query('UPDATE users SET role = \'admin\' WHERE id = $1', [user.id]).catch(console.error);
+    }
+
+    const token = jwt.sign({ id: user.id, email: user.email, role: role }, JWT_SECRET, { expiresIn: '7d' });
     res.json({ 
       token, 
       user: { 
         uid: user.id, 
         email: user.email, 
         displayName: user.display_name, 
-        role: user.role,
+        role: role,
         photoURL: user.photo_url,
         shippingAddress: user.shipping_address,
         shippingPhone: user.shipping_phone,
@@ -420,12 +428,19 @@ app.get("/api/auth/me", authenticateToken, async (req: any, res: any) => {
     const wishlistRes = await getPool().query('SELECT product_id FROM wishlist WHERE user_id = $1', [user.id]);
     const wishlist = wishlistRes.rows.map(r => r.product_id);
 
+    // Ensure master user always has admin role
+    let role = user.role;
+    if (user.email === 'hanichomoh@gmail.com' && role !== 'admin') {
+      role = 'admin';
+      getPool().query('UPDATE users SET role = \'admin\' WHERE id = $1', [user.id]).catch(console.error);
+    }
+
     res.json({ 
       user: { 
         uid: user.id, 
         email: user.email, 
         displayName: user.display_name, 
-        role: user.role,
+        role: role,
         photoURL: user.photo_url,
         shippingAddress: user.shipping_address,
         shippingPhone: user.shipping_phone,
@@ -729,7 +744,20 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     console.log(`Order ${orderId} committed successfully in ${Date.now() - start}ms`);
     
     // Notify via Telegram
-    sendTelegramNotification(orderId, total, items.length);
+    let firstItemImage = null;
+    if (items && items.length > 0) {
+      // Find the first item's image
+      try {
+        const prodRes = await client.query('SELECT images FROM products WHERE id = $1', [items[0].id]);
+        if (prodRes.rows.length > 0 && prodRes.rows[0].images && prodRes.rows[0].images.length > 0) {
+          firstItemImage = prodRes.rows[0].images[0];
+        }
+      } catch (e) {
+        console.warn("Failed to fetch first item image for notification:", e);
+      }
+    }
+    
+    sendTelegramNotification(orderId, total, items.length, 'NEW', firstItemImage);
 
     res.json({ id: orderId });
   } catch (err: any) {
@@ -751,7 +779,13 @@ app.put("/api/orders/:id/status", authenticateToken, isAdmin, async (req: any, r
       [status, orderId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
-    res.json(result.rows[0]);
+    
+    const updatedOrder = result.rows[0];
+    if (status === 'cancelled') {
+      sendTelegramNotification(orderId, Number(updatedOrder.total), 0, 'CANCELLED');
+    }
+    
+    res.json(updatedOrder);
   } catch (err: any) {
     console.error(`Update status error for order ${orderId}:`, err);
     res.status(500).json({ error: err.message });
@@ -782,6 +816,9 @@ app.delete("/api/orders/:id", authenticateToken, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Order not found or cannot be cancelled' });
     }
     
+    const cancelledOrder = result.rows[0];
+    sendTelegramNotification(orderId, Number(cancelledOrder.total), 0, 'CANCELLED');
+
     console.log(`Order ${orderId} cancelled successfully`);
     res.json({ message: 'Order cancelled' });
   } catch (err: any) {
@@ -815,36 +852,75 @@ app.post("/api/wishlist", authenticateToken, async (req: any, res: any) => {
   }
 });
 
-// Static files and SPA fallback
-if (!process.env.VERCEL) {
-  const PORT = process.env.PORT || 3000;
+// Server startup
+const PORT = process.env.PORT || 3000;
+
+async function startServer() {
+  try {
+    // Basic health check and DB init should be available even if Vite is loading
+    app.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+
+    // Start DB initialization
+    initializeDatabase().catch(err => {
+      console.error("Delayed database initialization failed:", err);
+    });
+
+    if (process.env.NODE_ENV !== "production") {
+      try {
+        const { createServer: createViteServer } = await import("vite");
+        const vite = await createViteServer({
+          server: { middlewareMode: true },
+          appType: "spa",
+          base: "/",
+        });
+        
+        app.use(vite.middlewares);
+        console.log("Vite dev middleware integrated successfully.");
+      } catch (viteErr) {
+        console.error("Failed to start Vite dev server, falling back to static serving:", viteErr);
+        serveStatic();
+      }
+    } else {
+      serveStatic();
+    }
+  } catch (err) {
+    console.error("Critical server startup error:", err);
+  }
+}
+
+function serveStatic() {
+  const distPath = path.join(process.cwd(), 'dist');
+  app.use(express.static(distPath));
   
-  // Local development only - dynamic Vite import
-  // Local development only - dynamic Vite import
-  import("vite").then(async ({ createServer: createViteServer }) => {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
-    app.use(vite.middlewares);
-    app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`Server running locally on port ${PORT}`);
-      initializeDatabase().catch(console.error);
-    });
-  }).catch(err => {
-    // Falls back to static serving if Vite is not available (e.g. production build)
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (req, res) => res.sendFile(path.join(distPath, 'index.html')));
-    app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`Server running statically on port ${PORT}`);
-      initializeDatabase().then(() => { isInitialized = true; }).catch(console.error);
+  // Only fallback to index.html for GET requests that are not likely assets
+  app.get('*', (req, res) => {
+    if (req.url.startsWith('/api')) return res.status(404).json({ error: 'Not Found' });
+    
+    // Avoid returning index.html for missing js/css/images
+    if (req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|json|map|ts|tsx)$/)) {
+      return res.status(404).send('Not Found');
+    }
+    
+    // Serve index.html for SPA routes
+    const indexPath = path.join(distPath, 'index.html');
+    res.sendFile(indexPath, (err) => {
+      if (err) {
+        // If dist/index.html doesn't exist, fall back to root index.html for dev convenience
+        // though in production this should be a 404
+        res.status(200).sendFile(path.join(process.cwd(), 'index.html'));
+      }
     });
   });
 }
 
+if (!process.env.VERCEL) {
+  startServer();
+}
+
 // Telegram Helper
-async function sendTelegramNotification(orderId: string, total: number, itemsCount: number) {
+async function sendTelegramNotification(orderId: string, total: number, itemsCount: number, type: 'NEW' | 'CANCELLED' = 'NEW', imageUrl?: string | null) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
   if (!token || !chatId) {
@@ -852,16 +928,43 @@ async function sendTelegramNotification(orderId: string, total: number, itemsCou
     return;
   }
 
-  const message = `🛍️ *New Order Received!*\n\nOrder ID: ${orderId}\nTotal: $${total}\nItems: ${itemsCount}`;
+  const isCancelled = type === 'CANCELLED';
+  const emoji = isCancelled ? '❌' : '🛍️';
+  const title = isCancelled ? '*Order Cancelled*' : '*New Order Received!*';
+  const itemsText = itemsCount > 0 ? `\nItems: ${itemsCount}` : '';
+  const message = `${emoji} ${title}\n\nOrder ID: ${orderId}\nTotal: $${total}${itemsText}`;
+
   try {
-    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+    const endpoint = imageUrl ? 'sendPhoto' : 'sendMessage';
+    const body: any = {
+      chat_id: chatId,
+      parse_mode: 'Markdown'
+    };
+
+    if (imageUrl) {
+      body.photo = imageUrl;
+      body.caption = message;
+    } else {
+      body.text = message;
+    }
+
+    const response = await fetch(`https://api.telegram.org/bot${token}/${endpoint}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'Markdown' })
+      body: JSON.stringify(body)
     });
+
     if (!response.ok) {
       const err = await response.text();
       console.error("Telegram API Error:", err);
+      // Fallback to text message if photo fails
+      if (imageUrl) {
+        await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'Markdown' })
+        });
+      }
     }
   } catch (e) {
     console.error("Failed to send Telegram notification:", e);
