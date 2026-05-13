@@ -19,23 +19,22 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 // Neon Connection String Handling
-const neonUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
+const neonUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
 
 let _pool: Pool | null = null;
 function getPool() {
   if (!_pool) {
-    const envDbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
-    const connectionString = (envDbUrl && envDbUrl.startsWith('postgres')) ? envDbUrl : neonUrl;
-    console.log("Initializing Postgres Pool...");
+    const connectionString = (neonUrl && neonUrl.startsWith('postgres')) ? neonUrl : neonUrl;
+    console.log("[DB] Initializing Postgres Pool...");
     _pool = new Pool({
       connectionString,
-      max: 20, 
+      max: 10, 
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000, 
+      connectionTimeoutMillis: 5000, 
       ssl: { rejectUnauthorized: false }
     });
     _pool.on('error', (err) => {
-      console.error('Unexpected error on idle DB client:', err);
+      console.error('[DB] Unexpected error on idle client:', err);
     });
   }
   return _pool;
@@ -959,20 +958,23 @@ async function startServer() {
   const resolvedDistPath = path.resolve(process.cwd(), 'dist');
   const distExists = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
   
-  // Detect production mode from NODE_ENV or presence of build artifacts
+  // Detect production mode
   const isProduction = process.env.NODE_ENV === 'production' || distExists;
 
   console.log(`\n--- SERVER STARTUP SEQUENCE ---`);
   console.log(`[BOOT] Time: ${new Date().toISOString()}`);
   console.log(`[BOOT] Mode: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
   console.log(`[BOOT] PORT: ${PORT}`);
+  console.log(`[BOOT] Dist Exists: ${distExists}`);
   
   try {
-    // 1. Database Init in background
-    initializeDatabase().catch(err => console.error("[DB] Background init error:", err.message));
+    // 1. Database Init in background - do not block
+    initializeDatabase().catch(err => {
+      console.error("[DB] Background initialization failed. The server will still function but API calls requiring DB may fail.", err.message);
+    });
 
-    // 2. Integration logic (Prefer Vite middleware in non-production environments if available)
-    if (process.env.NODE_ENV !== 'production' && !distExists) {
+    // 2. Integration logic (Prefer Vite middleware in non-production environments)
+    if (!isProduction) {
       try {
         console.log("[BOOT] Starting Vite Middleware...");
         const { createServer: createViteServer } = await import("vite");
@@ -984,19 +986,20 @@ async function startServer() {
         console.log("[BOOT] Vite Middleware ready.");
       } catch (e) {
         console.error("[BOOT] Vite initialization failed:", e);
-        if (distExists) setupStaticServing(resolvedDistPath);
+        if (distExists) {
+          console.log("[BOOT] Falling back to static assets...");
+          setupStaticServing(resolvedDistPath);
+        }
       }
+    } else if (distExists) {
+      console.log("[BOOT] Serving static files from /dist");
+      setupStaticServing(resolvedDistPath);
     } else {
-      console.log("[BOOT] Production Serving Mode: Looking for /dist");
-      if (distExists) {
-        setupStaticServing(resolvedDistPath);
-      } else {
-        console.warn("[BOOT] Warning: Dist folder not found for static serving.");
-      }
+      console.warn("[BOOT] Warning: No build artifacts found and not in dev mode.");
     }
 
     // 3. Final SPA Fallback
-    app.get('*', (req, res) => {
+    app.get('*', (req, res, next) => {
       // API 404
       if (req.url.startsWith('/api')) {
         return res.status(404).json({ error: 'API route not found' });
@@ -1010,6 +1013,7 @@ async function startServer() {
       // Try dist/index.html
       const indexPath = path.join(resolvedDistPath, 'index.html');
       if (fs.existsSync(indexPath)) {
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
         return res.sendFile(indexPath);
       }
 
@@ -1019,7 +1023,7 @@ async function startServer() {
         return res.status(200).sendFile(rootIndex);
       }
       
-      res.status(500).send("Application not built. Path: " + indexPath);
+      res.status(500).send(`Application not built. Mode: ${process.env.NODE_ENV}, Dist: ${distExists}`);
     });
 
     app.listen(PORT, "0.0.0.0", () => {

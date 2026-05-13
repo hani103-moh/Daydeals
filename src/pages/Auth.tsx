@@ -63,11 +63,10 @@ const Auth = () => {
         
         <div className="space-y-3">
           <div className="w-16 h-16 bg-primary rounded-2xl flex items-center justify-center mx-auto shadow-2xl shadow-primary/30 mb-4">
-            <span className="text-white font-black text-2xl">DD</span>
+            <span className="text-white font-black text-2xl uppercase">DM</span>
           </div>
           <h1 className="text-3xl font-black tracking-tight uppercase">
-            {authMode === 'login' ? 'Welcome ' : 'Join '}
-            <span className="gradient-text">{authMode === 'login' ? 'Back' : 'Us'}</span>
+            daydeals <br/><span className="gradient-text">merkato</span>
           </h1>
           <p className="text-xs text-muted-foreground font-medium">
             {authMode === 'login' ? 'Sync your deals across all devices' : 'Start your habesha deal hunting adventure'}

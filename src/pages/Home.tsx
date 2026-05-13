@@ -82,12 +82,12 @@ const Home = () => {
           >
             <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full glass border-white/20 text-white mb-2">
               <Sparkles className="w-3 h-3 text-secondary" />
-              <span className="text-[10px] font-bold tracking-wider uppercase">DAY DEALS × MERKATO</span>
+              <span className="text-[10px] font-bold tracking-wider uppercase">DAY DEALS MERKATO</span>
             </div>
             <h1 className="text-4xl md:text-6xl font-black text-white leading-tight uppercase tracking-tighter">
-              MERKATO <br/>
+              daydeals merkato <br/>
               <span className="text-secondary text-base md:text-2xl opacity-80 block mt-2">Delivered to your doorstep</span>
-              <span className="text-secondary">DIGITAL</span> DEALS
+              <span className="text-secondary uppercase">Premium</span> DEALS
             </h1>
             <p className="text-[10px] md:text-xs text-secondary font-black uppercase tracking-[0.2em] mb-4 bg-secondary/10 w-fit px-3 py-1 rounded-full border border-secondary/20">Merkato's Choice • Authentic Habesha Deals</p>
             <p className="text-sm md:text-base text-white/80 font-medium max-w-sm italic">

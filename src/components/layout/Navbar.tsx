@@ -51,9 +51,9 @@ export const Navbar = () => {
           )}
           <Link to="/" className="flex items-center space-x-2">
             <div className="w-10 h-10 bg-primary rounded-xl flex items-center justify-center shadow-lg shadow-primary/20">
-              <span className="text-white font-bold text-xl">DD</span>
+              <span className="text-white font-bold text-xl uppercase">DM</span>
             </div>
-            <span className="hidden md:block font-bold text-xl tracking-tight">DayDeals</span>
+            <span className="hidden md:block font-bold text-xl tracking-tight uppercase">daydeals merkato</span>
           </Link>
         </div>
 
