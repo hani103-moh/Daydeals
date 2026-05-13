@@ -1034,7 +1034,7 @@ async function startServer() {
 
     const finalPort = parseInt(process.env.PORT || '3000', 10);
     app.listen(finalPort, "0.0.0.0", () => {
-      console.log(`\n🚀 hub_deals SERVER ONLINE`);
+      console.log(`\n🚀 daydeals merkato SERVER ONLINE`);
       console.log(`✅ PORT: ${finalPort}`);
       console.log(`✅ STATUS: Ready for connections`);
       console.log(`-----------------------------------\n`);
@@ -1088,15 +1088,15 @@ async function sendTelegramNotification(details: {
   const isCancelled = type === 'CANCELLED';
   const isCompleted = type === 'COMPLETED';
   
-  let emoji = '🛒';
-  let title = 'New Order — hub_deals';
+  let emoji = '🛍️';
+  let title = 'daydeals merkato — Order Received';
   
   if (isCancelled) {
     emoji = '❌';
-    title = 'Order Cancelled — hub_deals';
+    title = 'daydeals merkato — Order Cancelled';
   } else if (isCompleted) {
     emoji = '✅';
-    title = 'Order Completed — hub_deals';
+    title = 'daydeals merkato — Order Completed';
   }
 
   const customerName = shippingAddress?.fullName || 'N/A';
