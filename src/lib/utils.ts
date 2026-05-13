@@ -6,7 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 export function formatPrice(amount: number) {
-  return new Intl.NumberFormat('en-ET', {
+  return new Intl.NumberFormat('en-US', {
     style: 'currency',
     currency: 'ETB',
     minimumFractionDigits: 0,

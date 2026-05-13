@@ -252,6 +252,16 @@ const authenticateToken = (req: any, res: any, next: any) => {
   });
 };
 
+const isAdmin = (req: any, res: any, next: any) => {
+  console.log(`Admin check for user: ${req.user?.email}, role: ${req.user?.role}`);
+  if (req.user && (req.user.role === 'admin' || req.user.email === 'hanichomoh@gmail.com')) {
+    next();
+  } else {
+    console.warn(`Admin access denied for: ${req.user?.email}`);
+    res.status(403).json({ error: 'Admin access required' });
+  }
+};
+
 app.post("/api/auth/register", async (req, res) => {
   try {
     const { email, password, displayName } = req.body;
@@ -511,8 +521,65 @@ app.get("/api/products", async (req, res) => {
 app.get("/api/products/:id", async (req, res) => {
   try {
     const result = await getPool().query('SELECT * FROM products WHERE id = $1', [req.params.id]);
-    res.json(result.rows[0] || { error: 'Not found' });
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    const row = result.rows[0];
+    res.json({
+      ...row,
+      price: Number(row.price),
+      rating: Number(row.rating),
+      soldCount: Number(row.sold_count || 0),
+      reviewsCount: Number(row.reviews_count || 0),
+      isFeatured: !!row.is_featured,
+      createdAt: new Date(row.created_at).getTime(),
+      tags: row.tags || []
+    });
   } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/products", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, price, category, images, stock } = req.body;
+    const id = 'p' + Math.random().toString(36).substr(2, 9);
+    const result = await getPool().query(
+      'INSERT INTO products (id, name, description, price, category, images, stock) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [id, name, description, price, category, images, stock]
+    );
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/products/:id", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, description, price, category, images, stock } = req.body;
+    const result = await getPool().query(
+      'UPDATE products SET name = $1, description = $2, price = $3, category = $4, images = $5, stock = $6 WHERE id = $7 RETURNING *',
+      [name, description, price, category, images, stock, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/products/:id", authenticateToken, isAdmin, async (req, res) => {
+  const productId = req.params.id;
+  console.log(`Attempting to delete product ${productId}`);
+  try {
+    // Check if product is in any orders
+    const orderCheck = await getPool().query('SELECT id FROM order_items WHERE product_id = $1 LIMIT 1', [productId]);
+    if (orderCheck.rows.length > 0) {
+      return res.status(400).json({ error: 'Cannot delete product that is associated with existing orders. Try updating its stock to 0 instead.' });
+    }
+
+    await getPool().query('DELETE FROM products WHERE id = $1', [productId]);
+    res.json({ message: 'Product deleted' });
+  } catch (err: any) {
+    console.error(`Delete product error for ${productId}:`, err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -527,7 +594,53 @@ app.get("/api/categories", async (req, res) => {
   }
 });
 
+app.post("/api/categories", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, icon, description } = req.body;
+    const id = 'c' + Math.random().toString(36).substr(2, 9);
+    const result = await getPool().query(
+      'INSERT INTO categories (id, name, icon, description) VALUES ($1, $2, $3, $4) RETURNING *',
+      [id, name, icon, description]
+    );
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put("/api/categories/:id", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { name, icon, description } = req.body;
+    const result = await getPool().query(
+      'UPDATE categories SET name = $1, icon = $2, description = $3 WHERE id = $4 RETURNING *',
+      [name, icon, description, req.params.id]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Category not found' });
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/categories/:id", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    await getPool().query('DELETE FROM categories WHERE id = $1', [req.params.id]);
+    res.json({ message: 'Category deleted' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Orders Routes
+app.get("/api/users", authenticateToken, isAdmin, async (req: any, res: any) => {
+  try {
+    const result = await getPool().query('SELECT id, email, display_name, role, created_at FROM users ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
   try {
     const user = req.user;
@@ -560,14 +673,25 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
         ORDER BY o.created_at DESC
       `, [user.id]);
     }
-    const orders = result.rows.map(row => ({
-      ...row,
-      userId: row.user_id,
-      totalAmount: Number(row.total),
-      shippingAddress: typeof row.shipping_address === 'string' ? JSON.parse(row.shipping_address) : row.shipping_address,
-      createdAt: new Date(row.created_at).getTime(),
-      updatedAt: new Date(row.created_at).getTime()
-    }));
+    const orders = result.rows.map(row => {
+      let shippingAddr = row.shipping_address;
+      if (typeof shippingAddr === 'string' && shippingAddr.startsWith('{')) {
+        try {
+          shippingAddr = JSON.parse(shippingAddr);
+        } catch (e) {
+          console.error('Failed to parse shipping address JSON:', e);
+        }
+      }
+      
+      return {
+        ...row,
+        userId: row.user_id,
+        totalAmount: Number(row.total),
+        shippingAddress: shippingAddr,
+        createdAt: new Date(row.created_at).getTime(),
+        updatedAt: new Date(row.created_at).getTime()
+      };
+    });
     res.json(orders);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -603,6 +727,10 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     
     await client.query('COMMIT');
     console.log(`Order ${orderId} committed successfully in ${Date.now() - start}ms`);
+    
+    // Notify via Telegram
+    sendTelegramNotification(orderId, total, items.length);
+
     res.json({ id: orderId });
   } catch (err: any) {
     if (client) await client.query('ROLLBACK');
@@ -610,6 +738,55 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     res.status(500).json({ error: err.message });
   } finally {
     client.release();
+  }
+});
+
+app.put("/api/orders/:id/status", authenticateToken, isAdmin, async (req: any, res: any) => {
+  const orderId = req.params.id;
+  const { status } = req.body;
+  console.log(`Updating order ${orderId} status to ${status}`);
+  try {
+    const result = await getPool().query(
+      'UPDATE orders SET status = $1 WHERE id = $2 RETURNING *',
+      [status, orderId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    console.error(`Update status error for order ${orderId}:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete("/api/orders/:id", authenticateToken, async (req: any, res: any) => {
+  const orderId = req.params.id;
+  const userId = req.user.id;
+  const role = req.user.role;
+  const isAdminUser = role === 'admin' || req.user.email === 'hanichomoh@gmail.com';
+
+  console.log(`Attempting to cancel order ${orderId} by user ${userId} (isAdmin: ${isAdminUser})`);
+
+  try {
+    let result;
+    if (isAdminUser) {
+      result = await getPool().query('UPDATE orders SET status = \'cancelled\' WHERE id = $1 RETURNING *', [orderId]);
+    } else {
+      result = await getPool().query(
+        'UPDATE orders SET status = \'cancelled\' WHERE id = $1 AND user_id = $2 AND status = \'pending\' RETURNING *',
+        [orderId, userId]
+      );
+    }
+    
+    if (result.rows.length === 0) {
+      console.warn(`Order ${orderId} cancel failed: Not found or not pending`);
+      return res.status(400).json({ error: 'Order not found or cannot be cancelled' });
+    }
+    
+    console.log(`Order ${orderId} cancelled successfully`);
+    res.json({ message: 'Order cancelled' });
+  } catch (err: any) {
+    console.error(`Order ${orderId} cancel error:`, err);
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -643,6 +820,7 @@ if (!process.env.VERCEL) {
   const PORT = process.env.PORT || 3000;
   
   // Local development only - dynamic Vite import
+  // Local development only - dynamic Vite import
   import("vite").then(async ({ createServer: createViteServer }) => {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -663,6 +841,31 @@ if (!process.env.VERCEL) {
       initializeDatabase().then(() => { isInitialized = true; }).catch(console.error);
     });
   });
+}
+
+// Telegram Helper
+async function sendTelegramNotification(orderId: string, total: number, itemsCount: number) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) {
+    console.warn("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured, skipping notification.");
+    return;
+  }
+
+  const message = `🛍️ *New Order Received!*\n\nOrder ID: ${orderId}\nTotal: $${total}\nItems: ${itemsCount}`;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text: message, parse_mode: 'Markdown' })
+    });
+    if (!response.ok) {
+      const err = await response.text();
+      console.error("Telegram API Error:", err);
+    }
+  } catch (e) {
+    console.error("Failed to send Telegram notification:", e);
+  }
 }
 
 export default app;
