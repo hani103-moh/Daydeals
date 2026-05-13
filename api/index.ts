@@ -15,14 +15,18 @@ function getPool() {
   if (!_pool) {
     const envDbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
     const connectionString = (envDbUrl && envDbUrl.startsWith('postgres')) ? envDbUrl : neonUrl;
+    console.log("Initializing Postgres Pool with string:", connectionString.split('@')[1] || 'default');
     _pool = new Pool({
       connectionString,
-      max: 20, // Increased for better concurrency
+      max: 20, 
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      connectionTimeoutMillis: 15000, // Slightly increased
       ssl: { rejectUnauthorized: false }
     });
-    _pool.on('error', (err) => console.error('Unexpected error on idle client', err));
+    _pool.on('error', (err) => {
+      console.error('Unexpected error on idle DB client:', err);
+      // Don't crash, just log. Pool should recover.
+    });
   }
   return _pool;
 }
@@ -195,17 +199,16 @@ app.use(express.json({ limit: '50mb' }));
 app.use(async (req, res, next) => {
   const start = Date.now();
   if (req.url.startsWith('/api') && req.url !== '/api/health' && req.url !== '/api/init-db') {
-    try {
-      await ensureInitialized();
-    } catch (err: any) {
-      console.error("Auto-init failed:", err);
-      // If we are getting a 500 error on every API call because of DB, it helps to know why
-      if (!isInitialized) {
-        return res.status(503).json({ 
-          error: "Database initializing or failed to initialize", 
-          details: err.message,
-          retryAfter: 5
-        });
+    // If not initialized, wait up to 10s then proceed anyway (better to fail fast than hang forever)
+    if (!isInitialized) {
+      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("DB init timeout")), 12000));
+      try {
+        await Promise.race([ensureInitialized(), timeoutPromise]);
+      } catch (err: any) {
+        console.warn("API request proceeded without full DB confirmation:", err.message);
+        if (!isInitialized && err.message === "DB init timeout") {
+          return res.status(503).json({ error: "Database is waking up, please try again in a moment." });
+        }
       }
     }
   }
@@ -214,7 +217,11 @@ app.use(async (req, res, next) => {
   res.on('finish', () => {
     if (req.url.startsWith('/api')) {
       const duration = Date.now() - start;
-      console.log(`${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+      if (duration > 1500) {
+        console.warn(`SLOW REQUEST: ${req.method} ${req.url} took ${duration}ms`);
+      } else {
+        console.log(`${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+      }
     }
   });
   
@@ -554,29 +561,40 @@ app.get("/api/products/:id", async (req, res) => {
 });
 
 app.post("/api/products", authenticateToken, isAdmin, async (req, res) => {
+  const start = Date.now();
   try {
     const { name, description, price, category, images, stock } = req.body;
+    console.log(`Creating product: ${name}, ${images?.length || 0} images, Payload size approx: ${JSON.stringify(req.body).length} bytes`);
+    
     const id = 'p' + Math.random().toString(36).substr(2, 9);
     const result = await getPool().query(
       'INSERT INTO products (id, name, description, price, category, images, stock) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
       [id, name, description, price, category, images, stock]
     );
+    console.log(`Product created successfully: ${id} in ${Date.now() - start}ms`);
     res.json(result.rows[0]);
   } catch (err: any) {
+    console.error("Product creation error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.put("/api/products/:id", authenticateToken, isAdmin, async (req, res) => {
+  const start = Date.now();
+  const productId = req.params.id;
   try {
     const { name, description, price, category, images, stock } = req.body;
+    console.log(`Updating product ${productId}: ${name}, ${images?.length || 0} images`);
+    
     const result = await getPool().query(
       'UPDATE products SET name = $1, description = $2, price = $3, category = $4, images = $5, stock = $6 WHERE id = $7 RETURNING *',
-      [name, description, price, category, images, stock, req.params.id]
+      [name, description, price, category, images, stock, productId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
+    console.log(`Product updated successfully: ${productId} in ${Date.now() - start}ms`);
     res.json(result.rows[0]);
   } catch (err: any) {
+    console.error(`Update product error for ${productId}:`, err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -730,6 +748,7 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     console.log(`Order record created: ${orderId}. Inserting ${items.length} items...`);
     
     if (items.length > 0) {
+      console.log(`Inserting items for order ${orderId}...`);
       const values: any[] = [];
       const placeholders = items.map((item: any, i: number) => {
         const offset = i * 4;
@@ -743,23 +762,26 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     await client.query('COMMIT');
     console.log(`Order ${orderId} committed successfully in ${Date.now() - start}ms`);
     
-    // Notify via Telegram
-    let firstItemImage = null;
-    if (items && items.length > 0) {
-      // Find the first item's image
-      try {
-        const prodRes = await client.query('SELECT images FROM products WHERE id = $1', [items[0].id]);
-        if (prodRes.rows.length > 0 && prodRes.rows[0].images && prodRes.rows[0].images.length > 0) {
-          firstItemImage = prodRes.rows[0].images[0];
-        }
-      } catch (e) {
-        console.warn("Failed to fetch first item image for notification:", e);
-      }
-    }
-    
-    sendTelegramNotification(orderId, total, items.length, 'NEW', firstItemImage);
-
+    // Notify via Telegram - move AFTER response to ensure client is not waiting
     res.json({ id: orderId });
+
+    // Handle background notification
+    const backgroundNotify = async () => {
+      let firstItemImage = null;
+      if (items && items.length > 0) {
+        try {
+          const prodRes = await getPool().query('SELECT images FROM products WHERE id = $1', [items[0].id]);
+          if (prodRes.rows.length > 0 && prodRes.rows[0].images && prodRes.rows[0].images.length > 0) {
+            firstItemImage = prodRes.rows[0].images[0];
+          }
+        } catch (e) {
+          console.warn("Background image fetch failed:", e);
+        }
+      }
+      sendTelegramNotification(orderId, total, items.length, 'NEW', firstItemImage);
+    };
+    
+    backgroundNotify();
   } catch (err: any) {
     if (client) await client.query('ROLLBACK');
     console.error("Order creation error:", err);
@@ -892,23 +914,34 @@ async function startServer() {
 
 function serveStatic() {
   const distPath = path.join(process.cwd(), 'dist');
-  app.use(express.static(distPath));
+  app.use(express.static(distPath, {
+    maxAge: '1d',
+    setHeaders: (res, path) => {
+      if (path.endsWith('.js')) {
+        res.setHeader('Content-Type', 'application/javascript');
+      }
+    }
+  }));
   
-  // Only fallback to index.html for GET requests that are not likely assets
+  // Only fallback to index.html for GET requests that are definitely for the UI
   app.get('*', (req, res) => {
-    if (req.url.startsWith('/api')) return res.status(404).json({ error: 'Not Found' });
-    
-    // Avoid returning index.html for missing js/css/images
-    if (req.url.match(/\.(js|css|png|jpg|jpeg|gif|svg|ico|json|map|ts|tsx)$/)) {
-      return res.status(404).send('Not Found');
+    // Never fallback for API routes
+    if (req.url.startsWith('/api')) {
+      return res.status(404).json({ error: 'API route not found' });
     }
     
-    // Serve index.html for SPA routes
+    // Never fallback for asset-like extensions - prevent 'text/html' MIME error on missing assets
+    const isAsset = /\.(js|ts|tsx|css|json|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|map)$/i.test(req.url);
+    if (isAsset) {
+      console.warn(`Asset 404: ${req.url}`);
+      return res.status(404).send('Asset not found');
+    }
+    
+    // Only serve index.html for extension-less paths (likely SPA routes)
     const indexPath = path.join(distPath, 'index.html');
     res.sendFile(indexPath, (err) => {
       if (err) {
-        // If dist/index.html doesn't exist, fall back to root index.html for dev convenience
-        // though in production this should be a 404
+        // Fallback to local index.html if dist/index.html doesn't exist (useful for dev)
         res.status(200).sendFile(path.join(process.cwd(), 'index.html'));
       }
     });
