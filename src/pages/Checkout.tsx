@@ -69,7 +69,7 @@ const Checkout = () => {
 
       const token = localStorage.getItem('token');
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout
+      const timeoutId = setTimeout(() => controller.abort(), 120000); // 120s timeout
 
       const res = await fetch('/api/orders', {
         method: 'POST',

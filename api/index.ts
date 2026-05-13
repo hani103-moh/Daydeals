@@ -20,7 +20,7 @@ function getPool() {
       connectionString,
       max: 20, 
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 15000, // Slightly increased
+      connectionTimeoutMillis: 30000, // Increased to 30s for slow cold starts
       ssl: { rejectUnauthorized: false }
     });
     _pool.on('error', (err) => {
@@ -183,7 +183,9 @@ let initPromise: Promise<void> | null = null;
 async function ensureInitialized() {
   if (isInitialized) return;
   if (!initPromise) {
+    console.log("Initializing database connection...");
     initPromise = initializeDatabase().catch(err => {
+      console.error("Database initialization failed:", err);
       initPromise = null;
       throw err;
     });
@@ -194,21 +196,24 @@ async function ensureInitialized() {
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Middleware to ensure DB is initialized for API calls
 app.use(async (req, res, next) => {
   const start = Date.now();
-  if (req.url.startsWith('/api') && req.url !== '/api/health' && req.url !== '/api/init-db') {
-    // If not initialized, wait up to 10s then proceed anyway (better to fail fast than hang forever)
+  
+  if (req.url.startsWith('/api')) {
+    if (req.url === '/api/health' || req.url === '/api/init-db') {
+      return next();
+    }
+
     if (!isInitialized) {
-      const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("DB init timeout")), 12000));
       try {
+        // Wait at most 8s for DB init before deciding what to do
+        const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout")), 8000));
         await Promise.race([ensureInitialized(), timeoutPromise]);
       } catch (err: any) {
-        console.warn("API request proceeded without full DB confirmation:", err.message);
-        if (!isInitialized && err.message === "DB init timeout") {
-          return res.status(503).json({ error: "Database is waking up, please try again in a moment." });
-        }
+        console.warn(`Request ${req.method} ${req.url} proceeding while DB is still initializing...`);
       }
     }
   }
@@ -217,10 +222,10 @@ app.use(async (req, res, next) => {
   res.on('finish', () => {
     if (req.url.startsWith('/api')) {
       const duration = Date.now() - start;
-      if (duration > 1500) {
-        console.warn(`SLOW REQUEST: ${req.method} ${req.url} took ${duration}ms`);
-      } else {
-        console.log(`${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+      if (duration > 3000) {
+        console.warn(`[PERF] VERY SLOW: ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
+      } else if (duration > 1000) {
+        console.log(`[PERF] SLOW: ${req.method} ${req.url} - ${res.statusCode} - ${duration}ms`);
       }
     }
   });
@@ -879,73 +884,66 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   try {
-    // Basic health check and DB init should be available even if Vite is loading
-    app.listen(Number(PORT), "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-    });
+    // 1. Database Init in background
+    initializeDatabase().catch(err => console.error("Database initialization failed:", err));
 
-    // Start DB initialization
-    initializeDatabase().catch(err => {
-      console.error("Delayed database initialization failed:", err);
-    });
-
+    // 2. Integration with Vite (Dev) or Static (Prod)
     if (process.env.NODE_ENV !== "production") {
       try {
+        console.log("Starting Vite in middleware mode...");
         const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
           server: { middlewareMode: true },
           appType: "spa",
-          base: "/",
         });
-        
         app.use(vite.middlewares);
-        console.log("Vite dev middleware integrated successfully.");
-      } catch (viteErr) {
-        console.error("Failed to start Vite dev server, falling back to static serving:", viteErr);
-        serveStatic();
+        console.log("Vite middleware attached.");
+      } catch (e) {
+        console.error("Vite failed, falling back to static:", e);
+        setupStaticServing();
       }
     } else {
-      serveStatic();
+      setupStaticServing();
     }
+
+    // 3. Final SPA Fallback (Only for non-asset GET requests)
+    app.get('*', (req, res) => {
+      // Don't fallback for API
+      if (req.url.startsWith('/api')) return res.status(404).json({ error: 'API not found' });
+      
+      // Don't fallback for things that look like assets but reached here
+      if (/\.(js|css|json|png|jpg|jpeg|gif|svg|ico|map|ts|tsx)$/i.test(req.url)) {
+        return res.status(404).send('Not Found');
+      }
+
+      const distPath = path.join(process.cwd(), 'dist');
+      const indexPath = path.join(distPath, 'index.html');
+      
+      res.sendFile(indexPath, (err) => {
+        if (err) {
+          // In development, we can try to serve the root index.html
+          res.status(200).sendFile(path.join(process.cwd(), 'index.html'));
+        }
+      });
+    });
+
+    app.listen(Number(PORT), "0.0.0.0", () => {
+      console.log(`Server listening on port ${PORT}`);
+    });
   } catch (err) {
-    console.error("Critical server startup error:", err);
+    console.error("Startup error:", err);
+    app.listen(Number(PORT), "0.0.0.0");
   }
 }
 
-function serveStatic() {
+function setupStaticServing() {
   const distPath = path.join(process.cwd(), 'dist');
   app.use(express.static(distPath, {
     maxAge: '1d',
     setHeaders: (res, path) => {
-      if (path.endsWith('.js')) {
-        res.setHeader('Content-Type', 'application/javascript');
-      }
+      if (path.endsWith('.js')) res.setHeader('Content-Type', 'application/javascript');
     }
   }));
-  
-  // Only fallback to index.html for GET requests that are definitely for the UI
-  app.get('*', (req, res) => {
-    // Never fallback for API routes
-    if (req.url.startsWith('/api')) {
-      return res.status(404).json({ error: 'API route not found' });
-    }
-    
-    // Never fallback for asset-like extensions - prevent 'text/html' MIME error on missing assets
-    const isAsset = /\.(js|ts|tsx|css|json|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|map)$/i.test(req.url);
-    if (isAsset) {
-      console.warn(`Asset 404: ${req.url}`);
-      return res.status(404).send('Asset not found');
-    }
-    
-    // Only serve index.html for extension-less paths (likely SPA routes)
-    const indexPath = path.join(distPath, 'index.html');
-    res.sendFile(indexPath, (err) => {
-      if (err) {
-        // Fallback to local index.html if dist/index.html doesn't exist (useful for dev)
-        res.status(200).sendFile(path.join(process.cwd(), 'index.html'));
-      }
-    });
-  });
 }
 
 if (!process.env.VERCEL) {

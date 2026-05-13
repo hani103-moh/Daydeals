@@ -62,7 +62,7 @@ const ProductsAdmin = () => {
     try {
       const token = localStorage.getItem('token');
       const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), 30000); // 30s timeout
+      const id = setTimeout(() => controller.abort(), 120000); // 120s timeout
 
       if (editingProduct?.id) {
         const res = await fetch(`/api/products/${editingProduct.id}`, {
