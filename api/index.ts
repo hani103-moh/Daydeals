@@ -964,31 +964,28 @@ app.post("/api/wishlist", authenticateToken, async (req: any, res: any) => {
 });
 
 // Server startup
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
 async function startServer() {
   const resolvedDistPath = path.resolve(process.cwd(), 'dist');
   const distExists = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
   
-  // CRITICAL: Force development mode if not explicitly set to production via environment variable
-  // This prevents the "waking up" hang caused by stale build files.
-  const isProduction = process.env.NODE_ENV === 'production';
+  // Detect production mode from NODE_ENV or presence of build artifacts
+  const isProduction = process.env.NODE_ENV === 'production' || distExists;
 
   console.log(`\n--- SERVER STARTUP SEQUENCE ---`);
   console.log(`[BOOT] Time: ${new Date().toISOString()}`);
-  console.log(`[BOOT] CWD: ${process.cwd()}`);
-  console.log(`[BOOT] Dist Path: ${resolvedDistPath} (Exists: ${distExists})`);
   console.log(`[BOOT] Mode: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
-  console.log(`[BOOT] PORT Required: ${process.env.PORT || 3000}`);
+  console.log(`[BOOT] PORT: ${PORT}`);
   
   try {
     // 1. Database Init in background
-    initializeDatabase().catch(err => console.error("[DB] Slow init error (expected if Neon is cold):", err.message));
+    initializeDatabase().catch(err => console.error("[DB] Background init error:", err.message));
 
-    // 2. Integration logic (Always prefer Vite middleware in development)
-    if (!isProduction) {
+    // 2. Integration logic (Prefer Vite middleware in non-production environments if available)
+    if (process.env.NODE_ENV !== 'production' && !distExists) {
       try {
-        console.log("[BOOT] Starting Vite Middleware for live development...");
+        console.log("[BOOT] Starting Vite Middleware...");
         const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
           server: { middlewareMode: true },
@@ -998,17 +995,14 @@ async function startServer() {
         console.log("[BOOT] Vite Middleware ready.");
       } catch (e) {
         console.error("[BOOT] Vite initialization failed:", e);
-        if (distExists) {
-          console.log("[BOOT] Falling back to static assets since Vite failed.");
-          setupStaticServing(resolvedDistPath);
-        }
+        if (distExists) setupStaticServing(resolvedDistPath);
       }
     } else {
-      console.log("[BOOT] Production Mode: Serving static files from /dist");
+      console.log("[BOOT] Production Serving Mode: Looking for /dist");
       if (distExists) {
         setupStaticServing(resolvedDistPath);
       } else {
-        console.error("[BOOT] CRITICAL: Dist folder missing in production mode!");
+        console.warn("[BOOT] Warning: Dist folder not found for static serving.");
       }
     }
 
@@ -1024,38 +1018,28 @@ async function startServer() {
         return res.status(404).send('Resource not found');
       }
 
-      // Try dist/index.html in production
-      if (isProduction || distExists) {
-        const indexPath = path.join(resolvedDistPath, 'index.html');
-        if (fs.existsSync(indexPath)) {
-          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-          return res.sendFile(indexPath);
-        }
+      // Try dist/index.html
+      const indexPath = path.join(resolvedDistPath, 'index.html');
+      if (fs.existsSync(indexPath)) {
+        return res.sendFile(indexPath);
       }
 
-      // In development, we don't need a fallback because Vite middleware handles it.
-      // But if we reach here, it's either an error or a missing build.
-      if (!isProduction) {
-        const rootIndex = path.resolve(process.cwd(), 'index.html');
-        if (fs.existsSync(rootIndex)) {
-          return res.status(200).sendFile(rootIndex);
-        }
+      // Root index.html fallback
+      const rootIndex = path.resolve(process.cwd(), 'index.html');
+      if (fs.existsSync(rootIndex)) {
+        return res.status(200).sendFile(rootIndex);
       }
       
-      res.status(500).send("Application not built or Vite middleware failed. Please check server logs.");
+      res.status(500).send("Application not built. Path: " + indexPath);
     });
 
-    const finalPort = parseInt(process.env.PORT || '3000', 10);
-    app.listen(finalPort, "0.0.0.0", () => {
-      console.log(`\n🚀 daydeals merkato SERVER ONLINE`);
-      console.log(`✅ PORT: ${finalPort}`);
-      console.log(`✅ STATUS: Ready for connections`);
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(`\n🚀 daydeals merkato SERVER ONLINE ON PORT ${PORT}`);
       console.log(`-----------------------------------\n`);
     });
   } catch (err) {
     console.error("[BOOT] CRITICAL FAILURE:", err);
-    // Try to listen anyway
-    try { app.listen(Number(process.env.PORT || 3000), "0.0.0.0"); } catch (e) {}
+    try { app.listen(PORT, "0.0.0.0"); } catch (e) {}
   }
 }
 
