@@ -968,13 +968,16 @@ const PORT = process.env.PORT || 3000;
 
 async function startServer() {
   const resolvedDistPath = path.resolve(process.cwd(), 'dist');
-  const hasDist = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
-  const isProduction = process.env.NODE_ENV === 'production' || hasDist;
+  const distExists = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
+  
+  // CRITICAL: Force development mode if not explicitly set to production via environment variable
+  // This prevents the "waking up" hang caused by stale build files.
+  const isProduction = process.env.NODE_ENV === 'production';
 
   console.log(`\n--- SERVER STARTUP SEQUENCE ---`);
   console.log(`[BOOT] Time: ${new Date().toISOString()}`);
   console.log(`[BOOT] CWD: ${process.cwd()}`);
-  console.log(`[BOOT] Dist Path: ${resolvedDistPath} (Exists: ${hasDist})`);
+  console.log(`[BOOT] Dist Path: ${resolvedDistPath} (Exists: ${distExists})`);
   console.log(`[BOOT] Mode: ${isProduction ? 'PRODUCTION' : 'DEVELOPMENT'}`);
   console.log(`[BOOT] PORT Required: ${process.env.PORT || 3000}`);
   
@@ -982,24 +985,31 @@ async function startServer() {
     // 1. Database Init in background
     initializeDatabase().catch(err => console.error("[DB] Slow init error (expected if Neon is cold):", err.message));
 
-    // 2. Integration logic
+    // 2. Integration logic (Always prefer Vite middleware in development)
     if (!isProduction) {
       try {
-        console.log("[BOOT] Attaching Vite middleware...");
+        console.log("[BOOT] Starting Vite Middleware for live development...");
         const { createServer: createViteServer } = await import("vite");
         const vite = await createViteServer({
           server: { middlewareMode: true },
           appType: "spa",
         });
         app.use(vite.middlewares);
-        console.log("[BOOT] Vite ready.");
+        console.log("[BOOT] Vite Middleware ready.");
       } catch (e) {
-        console.error("[BOOT] Vite init failed, falling back to static:", e);
-        if (hasDist) setupStaticServing(resolvedDistPath);
+        console.error("[BOOT] Vite initialization failed:", e);
+        if (distExists) {
+          console.log("[BOOT] Falling back to static assets since Vite failed.");
+          setupStaticServing(resolvedDistPath);
+        }
       }
     } else {
-      console.log("[BOOT] Setup static serving for production...");
-      setupStaticServing(resolvedDistPath);
+      console.log("[BOOT] Production Mode: Serving static files from /dist");
+      if (distExists) {
+        setupStaticServing(resolvedDistPath);
+      } else {
+        console.error("[BOOT] CRITICAL: Dist folder missing in production mode!");
+      }
     }
 
     // 3. Final SPA Fallback
@@ -1014,14 +1024,17 @@ async function startServer() {
         return res.status(404).send('Resource not found');
       }
 
-      // Try dist/index.html
-      const indexPath = path.join(resolvedDistPath, 'index.html');
-      if (fs.existsSync(indexPath)) {
-        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-        return res.sendFile(indexPath);
+      // Try dist/index.html in production
+      if (isProduction || distExists) {
+        const indexPath = path.join(resolvedDistPath, 'index.html');
+        if (fs.existsSync(indexPath)) {
+          res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+          return res.sendFile(indexPath);
+        }
       }
 
-      // Dev Fallback or Error
+      // In development, we don't need a fallback because Vite middleware handles it.
+      // But if we reach here, it's either an error or a missing build.
       if (!isProduction) {
         const rootIndex = path.resolve(process.cwd(), 'index.html');
         if (fs.existsSync(rootIndex)) {
@@ -1029,7 +1042,7 @@ async function startServer() {
         }
       }
       
-      res.status(500).send("Application not built. Please run 'npm run build' first. Checked path: " + indexPath);
+      res.status(500).send("Application not built or Vite middleware failed. Please check server logs.");
     });
 
     const finalPort = parseInt(process.env.PORT || '3000', 10);
