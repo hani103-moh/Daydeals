@@ -199,6 +199,17 @@ app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Global performance and size monitoring
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'PUT') {
+    const size = JSON.stringify(req.body).length;
+    if (size > 1024 * 512) { // Monitor requests > 512KB
+      console.warn(`[SIZE-WATCH] Large ${req.method} request to ${req.url}: ${(size / 1024).toFixed(1)} KB`);
+    }
+  }
+  next();
+});
+
 // Middleware to ensure DB is initialized for API calls
 app.use(async (req, res, next) => {
   const start = Date.now();
@@ -807,12 +818,29 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     // Background notification
     (async () => {
       try {
-        let firstItemImage = null;
-        const prodRes = await getPool().query('SELECT images[1:1] as images FROM products WHERE id = $1', [items[0].id]);
-        if (prodRes.rows.length > 0 && prodRes.rows[0].images?.length > 0) {
-          firstItemImage = prodRes.rows[0].images[0];
-        }
-        await sendTelegramNotification(orderId, total, items.length, 'NEW', firstItemImage);
+        const productIds = items.map((i: any) => i.id);
+        const prodRes = await getPool().query('SELECT id, name, images[1:1] as images FROM products WHERE id = ANY($1)', [productIds]);
+        
+        const productsMap = prodRes.rows.reduce((acc: any, p: any) => {
+          acc[p.id] = p;
+          return acc;
+        }, {});
+
+        const detailedItems = items.map((i: any) => ({
+          ...i,
+          name: productsMap[i.id]?.name || 'Unknown Product'
+        }));
+
+        const firstItemImage = prodRes.rows.find(p => p.id === items[0].id)?.images?.[0] || null;
+
+        await sendTelegramNotification({
+          orderId,
+          total,
+          shippingAddress,
+          items: detailedItems,
+          type: 'NEW',
+          imageUrl: firstItemImage
+        });
       } catch (err) {
         console.error("[ORDER] Background notify failed:", err);
       }
@@ -842,7 +870,13 @@ app.put("/api/orders/:id/status", authenticateToken, isAdmin, async (req: any, r
     
     const updatedOrder = result.rows[0];
     if (status === 'cancelled') {
-      sendTelegramNotification(orderId, Number(updatedOrder.total), 0, 'CANCELLED');
+      sendTelegramNotification({
+        orderId, 
+        total: Number(updatedOrder.total), 
+        shippingAddress: typeof updatedOrder.shipping_address === 'string' ? JSON.parse(updatedOrder.shipping_address) : updatedOrder.shipping_address,
+        items: [], 
+        type: 'CANCELLED'
+      });
     }
     
     res.json(updatedOrder);
@@ -877,7 +911,13 @@ app.delete("/api/orders/:id", authenticateToken, async (req: any, res: any) => {
     }
     
     const cancelledOrder = result.rows[0];
-    sendTelegramNotification(orderId, Number(cancelledOrder.total), 0, 'CANCELLED');
+    sendTelegramNotification({
+      orderId, 
+      total: Number(cancelledOrder.total), 
+      shippingAddress: typeof cancelledOrder.shipping_address === 'string' ? JSON.parse(cancelledOrder.shipping_address) : cancelledOrder.shipping_address,
+      items: [], 
+      type: 'CANCELLED'
+    });
 
     console.log(`Order ${orderId} cancelled successfully`);
     res.json({ message: 'Order cancelled' });
@@ -984,28 +1024,83 @@ if (!process.env.VERCEL) {
 }
 
 // Telegram Helper
-async function sendTelegramNotification(orderId: string, total: number, itemsCount: number, type: 'NEW' | 'CANCELLED' = 'NEW', imageUrl?: string | null) {
+async function sendTelegramNotification(details: {
+  orderId: string,
+  total: number,
+  shippingAddress: any,
+  items: any[],
+  type?: 'NEW' | 'CANCELLED' | 'COMPLETED',
+  imageUrl?: string | null
+}) {
+  const { orderId, total, shippingAddress, items, type = 'NEW', imageUrl } = details;
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
+  
   if (!token || !chatId) {
     console.warn("TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not configured, skipping notification.");
     return;
   }
 
   const isCancelled = type === 'CANCELLED';
-  const emoji = isCancelled ? '❌' : '🛍️';
-  const title = isCancelled ? '*Order Cancelled*' : '*New Order Received!*';
-  const itemsText = itemsCount > 0 ? `\nItems: ${itemsCount}` : '';
-  const message = `${emoji} ${title}\n\nOrder ID: ${orderId}\nTotal: $${total}${itemsText}`;
+  const isCompleted = type === 'COMPLETED';
+  
+  let emoji = '🛒';
+  let title = 'New Order — hub_deals';
+  
+  if (isCancelled) {
+    emoji = '❌';
+    title = 'Order Cancelled — hub_deals';
+  } else if (isCompleted) {
+    emoji = '✅';
+    title = 'Order Completed — hub_deals';
+  }
+
+  const customerName = shippingAddress?.fullName || 'N/A';
+  const phone = shippingAddress?.phone || 'N/A';
+  const address = shippingAddress?.address || 'N/A';
+  const city = shippingAddress?.city || 'N/A';
+  const area = shippingAddress?.area || 'N/A';
+
+  let itemsListText = '';
+  let subtotal = 0;
+  
+  if (items && items.length > 0) {
+    itemsListText = '\n📦 *Items:*\n' + items.map(item => {
+      const itemTotal = (item.price || 0) * (item.quantity || 1);
+      subtotal += itemTotal;
+      return `• ${item.name || 'Product'} × ${item.quantity || 1} — ${itemTotal.toLocaleString()} ETB`;
+    }).join('\n');
+  }
+
+  // Calculate delivery (dummy math if not provided, assuming total includes it)
+  const delivery = total - subtotal;
+
+  const message = `${emoji} *${title}*
+
+👤 *Customer:* ${customerName}
+📞 *Phone:* ${phone}
+
+📍 *Shipping Address:*
+${address}
+${area}, ${city}
+${itemsListText}
+
+💰 *Subtotal:* ${subtotal.toLocaleString()} ETB
+🚚 *Delivery:* ${delivery > 0 ? delivery.toLocaleString() : '0'} ETB
+💵 *Total:* ${total.toLocaleString()} ETB
+💳 *Payment:* Cash on Delivery
+
+🆔 *Order ID:* ${orderId}`;
 
   try {
-    const endpoint = imageUrl ? 'sendPhoto' : 'sendMessage';
+    const isBase64 = imageUrl && imageUrl.startsWith('data:');
+    const endpoint = (imageUrl && !isBase64) ? 'sendPhoto' : 'sendMessage';
     const body: any = {
       chat_id: chatId,
       parse_mode: 'Markdown'
     };
 
-    if (imageUrl) {
+    if (imageUrl && !isBase64) {
       body.photo = imageUrl;
       body.caption = message;
     } else {
@@ -1021,7 +1116,6 @@ async function sendTelegramNotification(orderId: string, total: number, itemsCou
     if (!response.ok) {
       const err = await response.text();
       console.error("Telegram API Error:", err);
-      // Fallback to text message if photo fails
       if (imageUrl) {
         await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
           method: 'POST',
@@ -1034,5 +1128,15 @@ async function sendTelegramNotification(orderId: string, total: number, itemsCou
     console.error("Failed to send Telegram notification:", e);
   }
 }
+
+// Final Global Error Handler
+app.use((err: any, req: any, res: any, next: any) => {
+  console.error("!!! UNHANDLED EXPRESS ERROR !!!", err);
+  res.status(500).json({ 
+    error: "Internal Server Error", 
+    message: err.message,
+    path: req.url
+  });
+});
 
 export default app;
