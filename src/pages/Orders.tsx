@@ -138,6 +138,11 @@ const Orders = () => {
     }
   };
 
+  const getStepIndex = (status: string) => {
+    const steps = ['pending', 'confirmed', 'packed', 'shipped', 'out_for_delivery', 'delivered'];
+    return steps.indexOf(status);
+  };
+
   return (
     <div className="container mx-auto px-4 py-8 max-w-4xl">
       <div className="flex items-center justify-between mb-8">
@@ -283,6 +288,67 @@ const Orders = () => {
                 </DialogHeader>
 
                 <div className="space-y-6">
+                  {/* Live Tracking Timeline */}
+                  {selectedOrder.status !== 'cancelled' ? (
+                    <div className="space-y-4 bg-white/5 p-6 rounded-3xl border border-white/5">
+                      <h3 className="text-xs font-black uppercase tracking-widest text-primary flex items-center gap-2">
+                        <Truck className="w-4 h-4" /> Live Tracking Status
+                      </h3>
+                      
+                      <div className="relative pt-6 pb-2">
+                        {/* Track bar backgrounds */}
+                        <div className="absolute top-[28px] left-6 right-6 h-0.5 bg-white/10 -z-1" />
+                        
+                        <div className="absolute top-[28px] left-6 h-0.5 bg-primary transition-all duration-500 -z-1" 
+                             style={{ 
+                               width: `${Math.max(0, (getStepIndex(selectedOrder.status) / 5) * 88)}%` 
+                             }} 
+                        />
+
+                        <div className="flex justify-between items-start relative z-10 overflow-x-auto pb-2 no-scrollbar gap-2">
+                          {['pending', 'confirmed', 'packed', 'shipped', 'out_for_delivery', 'delivered'].map((step, idx) => {
+                            const isCompleted = idx <= getStepIndex(selectedOrder.status);
+                            const isActive = step === selectedOrder.status;
+                            const niceLabels: Record<string, string> = {
+                              pending: 'Pending',
+                              confirmed: 'Confirmed',
+                              packed: 'Packed',
+                              shipped: 'Shipped',
+                              out_for_delivery: 'Out for delivery',
+                              delivered: 'Delivered'
+                            };
+
+                            return (
+                              <div key={step} className="flex flex-col items-center shrink-0 w-14 text-center space-y-2">
+                                <div className={cn(
+                                  "w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-black transition-all",
+                                  isActive ? "bg-primary text-black scale-110 ring-4 ring-primary/20" :
+                                  isCompleted ? "bg-primary/80 text-black animate-pulse" : "bg-white/15 text-muted-foreground/60"
+                                )}>
+                                  {isCompleted ? '✓' : idx + 1}
+                                </div>
+                                <span className={cn(
+                                  "text-[7px] font-extrabold uppercase tracking-tighter leading-none block max-w-[50px] mx-auto",
+                                  isActive ? "text-primary font-boldScale" : "text-muted-foreground/50"
+                                )}>
+                                  {niceLabels[step]}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="bg-red-500/10 border border-red-500/20 text-red-500 p-4 rounded-3xl flex items-center gap-3">
+                      <XCircle className="w-5 h-5 shrink-0" />
+                      <div className="text-xs">
+                        <p className="font-bold uppercase leading-none">Order Was Cancelled</p>
+                        <p className="opacity-75 mt-1">This order is closed and stock balances have been returned.</p>
+                      </div>
+                    </div>
+                  )}
+
                   <div>
                     <h3 className="text-xs font-black uppercase tracking-widest text-primary mb-4 flex items-center gap-2">
                        <ShoppingBag className="w-4 h-4" /> Items Ordered

@@ -13,9 +13,9 @@ interface StoreContextType {
   wishlist: string[];
   orders: Order[];
   ordersCount: number;
-  addToCart: (product: Product) => void;
-  removeFromCart: (productId: string) => void;
-  updateQuantity: (productId: string, quantity: number) => void;
+  addToCart: (product: Product, selectedVariant?: any) => void;
+  removeFromCart: (productId: string, selectedVariantId?: string) => void;
+  updateQuantity: (productId: string, quantity: number, selectedVariantId?: string) => void;
   clearCart: () => void;
   toggleWishlist: (productId: string) => void;
   login: () => Promise<void>;
@@ -277,7 +277,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const addToCart = (product: Product) => {
+  const addToCart = (product: Product, selectedVariant?: any) => {
     if (!user) {
       toast.error('Please sign in to add items to your cart', {
         action: {
@@ -288,28 +288,43 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       return;
     }
     setCart((prev) => {
-      const existingItem = prev.find((item) => item.id === product.id);
+      const existingItem = prev.find((item) => 
+        item.id === product.id && 
+        (!selectedVariant || item.selectedVariant?.id === selectedVariant.id)
+      );
       if (existingItem) {
         return prev.map((item) =>
-          item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item
+          item.id === product.id && 
+          (!selectedVariant || item.selectedVariant?.id === selectedVariant.id)
+            ? { ...item, quantity: item.quantity + 1 } 
+            : item
         );
       }
-      return [...prev, { ...product, quantity: 1 }];
+      return [...prev, { ...product, quantity: 1, selectedVariant }];
     });
-    toast.success(`${product.name} added to cart`);
+    const displayName = selectedVariant 
+      ? `${product.name} (${selectedVariant.size || ''} ${selectedVariant.color || ''})`
+      : product.name;
+    toast.success(`${displayName} added to cart`);
   };
 
-  const removeFromCart = (productId: string) => {
-    setCart((prev) => prev.filter((item) => item.id !== productId));
+  const removeFromCart = (productId: string, selectedVariantId?: string) => {
+    setCart((prev) => prev.filter((item) => 
+      !(item.id === productId && (!selectedVariantId || item.selectedVariant?.id === selectedVariantId))
+    ));
   };
 
-  const updateQuantity = (productId: string, quantity: number) => {
+  const updateQuantity = (productId: string, quantity: number, selectedVariantId?: string) => {
     if (quantity <= 0) {
-      removeFromCart(productId);
+      removeFromCart(productId, selectedVariantId);
       return;
     }
     setCart((prev) =>
-      prev.map((item) => (item.id === productId ? { ...item, quantity } : item))
+      prev.map((item) => 
+        item.id === productId && (!selectedVariantId || item.selectedVariant?.id === selectedVariantId)
+          ? { ...item, quantity } 
+          : item
+      )
     );
   };
 

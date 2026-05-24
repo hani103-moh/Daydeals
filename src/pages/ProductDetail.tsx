@@ -18,6 +18,7 @@ const ProductDetail = () => {
   const [activeImage, setActiveImage] = useState(0);
   const [loading, setLoading] = useState(true);
   const [productDetail, setProductDetail] = useState<Product | null>(null);
+  const [selectedVariant, setSelectedVariant] = useState<any>(null);
 
   useEffect(() => {
     const fetchProduct = async () => {
@@ -39,6 +40,29 @@ const ProductDetail = () => {
   // Fallback to store if available while loading or if fetch fails
   const product = productDetail || products.find(p => p.id === id);
 
+  useEffect(() => {
+    if (product && product.variants && product.variants.length > 0) {
+      setSelectedVariant(product.variants[0]);
+    } else {
+      setSelectedVariant(null);
+    }
+  }, [product]);
+
+  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!id) return;
+    try {
+      const existingRaw = localStorage.getItem('recently-viewed');
+      let list: string[] = existingRaw ? JSON.parse(existingRaw) : [];
+      setRecentlyViewedIds(list.filter(pId => pId !== id));
+      list = [id, ...list.filter(pId => pId !== id)].slice(0, 6);
+      localStorage.setItem('recently-viewed', JSON.stringify(list));
+    } catch (e) {
+      console.error('Failed to log recently viewed:', e);
+    }
+  }, [id]);
+
   if (!product && loading) {
     return (
       <div className="container mx-auto px-4 py-40 flex flex-col items-center justify-center space-y-4">
@@ -58,6 +82,9 @@ const ProductDetail = () => {
   }
 
   const isWishlisted = wishlist.includes(product.id);
+
+  const relatedProducts = products.filter(p => p.category === product.category && p.id !== product.id).slice(0, 4);
+  const recentlyViewedProducts = products.filter(p => recentlyViewedIds.includes(p.id)).slice(0, 4);
 
   return (
     <div className="container mx-auto px-4 py-6 max-w-5xl">
@@ -127,7 +154,18 @@ const ProductDetail = () => {
                 {product.rating || (4.5).toFixed(1)} ({product.sold_count || 0} units sold)
               </span>
             </div>
-            {product.stock !== undefined && (
+            {selectedVariant !== null && selectedVariant.stock !== undefined ? (
+              <div className="flex items-center gap-2 mt-1">
+                <div className={cn(
+                  "px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest",
+                  selectedVariant.stock > 10 ? "bg-green-500/10 text-green-500" : 
+                  selectedVariant.stock > 0 ? "bg-orange-500/10 text-orange-500" : 
+                  "bg-red-500/10 text-red-500"
+                )}>
+                  {selectedVariant.stock > 0 ? `Selected Pack Option Stock: ${selectedVariant.stock}` : 'Option Out of Stock'}
+                </div>
+              </div>
+            ) : product.stock !== undefined && (
               <div className="flex items-center gap-2 mt-1">
                 <div className={cn(
                   "px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-widest",
@@ -141,10 +179,37 @@ const ProductDetail = () => {
             )}
           </div>
 
+          {/* Product Variants Selector */}
+          {product.variants && product.variants.length > 0 && (
+            <div className="space-y-2 py-1.5">
+              <span className="text-[10px] font-black uppercase text-muted-foreground/80 tracking-widest ml-1">Select Variant / Option:</span>
+              <div className="flex flex-wrap gap-2">
+                {product.variants.map((v: any, idx: number) => (
+                  <button
+                    key={v.id || idx}
+                    type="button"
+                    onClick={() => setSelectedVariant(v)}
+                    className={cn(
+                      "px-3 py-2 rounded-xl border text-xs text-left transition-all outline-none flex flex-col gap-0.5 min-w-[100px]",
+                      selectedVariant?.id === v.id
+                        ? "border-primary bg-primary/10 text-primary scale-[1.02] shadow shadow-primary/10"
+                        : "border-white/10 hover:border-white/20 bg-white/5 text-muted-foreground"
+                    )}
+                  >
+                    <span className="font-extrabold uppercase">
+                      {[v.size && `Size ${v.size}`, v.color && `Color ${v.color}`].filter(Boolean).join(' | ')}
+                    </span>
+                    <span className="text-[9px] font-medium text-muted-foreground/60">{formatPrice(v.price || product.price)}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex items-baseline gap-3">
-             <span className="text-4xl font-black text-foreground">{formatPrice(product.price)}</span>
+             <span className="text-4xl font-black text-foreground">{formatPrice(selectedVariant?.price || product.price)}</span>
              <span className="text-sm text-muted-foreground/50 line-through font-bold">
-               {formatPrice(product.price * 1.2)}
+               {formatPrice((selectedVariant?.price || product.price) * 1.2)}
              </span>
           </div>
 
@@ -158,7 +223,8 @@ const ProductDetail = () => {
             <Button 
               size="lg" 
               className="h-14 rounded-2xl text-sm font-black uppercase shadow-lg shadow-primary/20 flex-[2]"
-              onClick={() => addToCart(product)}
+              onClick={() => addToCart(product, selectedVariant)}
+              disabled={selectedVariant ? selectedVariant.stock <= 0 : product.stock <= 0}
             >
               <ShoppingBag className="mr-2 w-5 h-5" /> Add to Order
             </Button>
@@ -198,6 +264,68 @@ const ProductDetail = () => {
           </div>
         </div>
       </div>
+
+      {/* Related Products Section */}
+      {relatedProducts.length > 0 && (
+        <div className="mt-16 space-y-6 pt-12 border-t border-white/5">
+          <h2 className="text-xl font-black uppercase tracking-tight">Related <span className="text-primary">Products</span></h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {relatedProducts.map((p) => (
+              <div 
+                key={p.id}
+                onClick={() => {
+                  navigate(`/product/${p.id}`);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="mobile-card p-2.5 rounded-2xl border border-white/5 hover:border-primary/20 bg-white/5 cursor-pointer group transition-all flex flex-col justify-between"
+              >
+                <div>
+                  <div className="aspect-square rounded-xl overflow-hidden glass mb-3 relative">
+                    <img src={p.images?.[0] || PLACEHOLDER_IMAGE} alt={p.name} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" referrerPolicy="no-referrer" />
+                  </div>
+                  <h3 className="font-extrabold text-xs truncate uppercase px-1">{p.name}</h3>
+                  <p className="text-[10px] text-muted-foreground uppercase px-1 mt-0.5">{p.category}</p>
+                </div>
+                <div className="flex items-center justify-between mt-3 px-1">
+                  <span className="font-black text-xs text-foreground">{formatPrice(p.price)}</span>
+                  <span className="text-[8px] bg-primary/10 text-primary font-black uppercase px-1.5 py-0.5 rounded">View</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Recently Viewed Products Section */}
+      {recentlyViewedProducts.length > 0 && (
+        <div className="mt-16 space-y-6 pt-12 border-t border-white/5">
+          <h2 className="text-xl font-black uppercase tracking-tight">Recently <span className="text-primary">Viewed</span></h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {recentlyViewedProducts.map((p) => (
+              <div 
+                key={p.id}
+                onClick={() => {
+                  navigate(`/product/${p.id}`);
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="mobile-card p-2.5 rounded-2xl border border-white/5 hover:border-primary/20 bg-white/5 cursor-pointer group transition-all flex flex-col justify-between"
+              >
+                <div>
+                  <div className="aspect-square rounded-xl overflow-hidden glass mb-3 relative">
+                    <img src={p.images?.[0] || PLACEHOLDER_IMAGE} alt={p.name} className="w-full h-full object-cover transition-transform group-hover:scale-105 duration-300" referrerPolicy="no-referrer" />
+                  </div>
+                  <h3 className="font-extrabold text-xs truncate uppercase px-1">{p.name}</h3>
+                  <p className="text-[10px] text-muted-foreground uppercase px-1 mt-0.5">{p.category}</p>
+                </div>
+                <div className="flex items-center justify-between mt-3 px-1">
+                  <span className="font-black text-xs text-foreground">{formatPrice(p.price)}</span>
+                  <span className="text-[8px] bg-primary/10 text-primary font-black uppercase px-1.5 py-0.5 rounded">View</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

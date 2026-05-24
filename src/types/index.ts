@@ -12,6 +12,7 @@ export interface Product {
   activeOrders?: number;
   tags: string[];
   isFeatured?: boolean;
+  variants?: { id: string; size?: string; color?: string; price?: number; stock: number }[];
   createdAt: number;
   updatedAt: number;
 }
@@ -21,10 +22,12 @@ export interface Category {
   name: string;
   icon: string;
   description: string;
+  position?: number;
 }
 
 export interface CartItem extends Product {
   quantity: number;
+  selectedVariant?: { id: string; size?: string; color?: string; price?: number; stock: number };
 }
 
 export interface Order {
@@ -32,7 +35,9 @@ export interface Order {
   userId: string;
   items: CartItem[];
   totalAmount: number;
-  status: 'pending' | 'processing' | 'shipped' | 'delivered' | 'cancelled';
+  status: 'pending' | 'confirmed' | 'packed' | 'shipped' | 'out_for_delivery' | 'delivered' | 'cancelled';
+  paymentStatus?: 'unpaid' | 'paid' | 'failed' | 'refunded';
+  paymentTxRef?: string;
   shippingAddress: {
     fullName: string;
     phone: string;

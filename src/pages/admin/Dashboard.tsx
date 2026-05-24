@@ -10,7 +10,8 @@ import {
   TrendingUp,
   Users as UsersIcon,
   DollarSign,
-  LayoutGrid
+  LayoutGrid,
+  Mail
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { cn } from '@/lib/utils';
@@ -19,6 +20,7 @@ import OrdersAdmin from './Orders';
 import CategoriesAdmin from './Categories';
 import UsersAdmin from './Users';
 import Overview from './Overview';
+import EmailsAdmin from './Emails';
 
 const AdminDashboard = () => {
   const location = useLocation();
@@ -30,6 +32,7 @@ const AdminDashboard = () => {
     { name: 'Categories', path: '/admin/categories', icon: LayoutGrid },
     { name: 'Orders', path: '/admin/orders', icon: ShoppingCart },
     { name: 'Users', path: '/admin/users', icon: UsersIcon },
+    { name: 'Emails', path: '/admin/emails', icon: Mail },
     { name: 'Analytics', path: '/admin/analytics', icon: BarChart3 },
     { name: 'Settings', path: '/admin/settings', icon: Settings },
   ];
@@ -103,6 +106,7 @@ const AdminDashboard = () => {
           <Route path="categories" element={<CategoriesAdmin />} />
           <Route path="orders" element={<OrdersAdmin />} />
           <Route path="users" element={<UsersAdmin />} />
+          <Route path="emails" element={<EmailsAdmin />} />
           <Route path="analytics" element={<Overview />} /> {/* Temporary */}
           <Route path="settings" element={<div className="text-4xl font-black">Settings Coming Soon</div>} />
         </Routes>

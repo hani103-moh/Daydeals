@@ -45,7 +45,7 @@ const Cart = () => {
           <AnimatePresence mode="popLayout">
             {cart.map((item) => (
               <motion.div
-                key={item.id}
+                key={item.id + (item.selectedVariant ? '-' + item.selectedVariant.id : '')}
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
@@ -58,9 +58,18 @@ const Cart = () => {
                   <h3 className="font-bold text-sm truncate">
                     <Link to={`/product/${item.id}`}>{item.name}</Link>
                   </h3>
+                  
+                  {item.selectedVariant && (
+                    <div className="px-2 py-0.5 rounded bg-primary/10 text-primary text-[10px] font-bold uppercase w-fit tracking-wide">
+                      {item.selectedVariant.size && `Size: ${item.selectedVariant.size}`}
+                      {item.selectedVariant.size && item.selectedVariant.color && ' | '}
+                      {item.selectedVariant.color && `Color: ${item.selectedVariant.color}`}
+                    </div>
+                  )}
+
                   <div className="flex items-baseline gap-2">
-                    <p className="text-foreground font-black text-sm">{formatPrice(item.price)}</p>
-                    <p className="text-[9px] text-muted-foreground/40 line-through">{formatPrice(item.price * 1.2)}</p>
+                    <p className="text-foreground font-black text-sm">{formatPrice(item.selectedVariant?.price || item.price)}</p>
+                    <p className="text-[9px] text-muted-foreground/40 line-through">{formatPrice((item.selectedVariant?.price || item.price) * 1.2)}</p>
                   </div>
                   <p className="text-[10px] text-muted-foreground font-black uppercase tracking-widest">{item.category}</p>
                   
@@ -70,7 +79,7 @@ const Cart = () => {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 rounded-md hover:bg-primary/10"
-                        onClick={() => updateQuantity(item.id, item.quantity - 1)}
+                        onClick={() => updateQuantity(item.id, item.quantity - 1, item.selectedVariant?.id)}
                       >
                         <Minus className="w-3 h-3" />
                       </Button>
@@ -79,7 +88,7 @@ const Cart = () => {
                         variant="ghost"
                         size="icon"
                         className="h-7 w-7 rounded-md hover:bg-primary/10"
-                        onClick={() => updateQuantity(item.id, item.quantity + 1)}
+                        onClick={() => updateQuantity(item.id, item.quantity + 1, item.selectedVariant?.id)}
                       >
                         <Plus className="w-3 h-3" />
                       </Button>
@@ -88,7 +97,7 @@ const Cart = () => {
                       variant="ghost"
                       size="icon"
                       className="h-8 w-8 text-destructive/60 hover:text-destructive hover:bg-destructive/10 rounded-lg"
-                      onClick={() => removeFromCart(item.id)}
+                      onClick={() => removeFromCart(item.id, item.selectedVariant?.id)}
                     >
                       <Trash2 className="w-4 h-4" />
                     </Button>

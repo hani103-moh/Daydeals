@@ -137,7 +137,22 @@ async function initializeDatabase() {
     // 1. FAST CHECK: Faster than information_schema
     const tableCheck = await client.query("SELECT to_regclass('public.users')");
     if (tableCheck.rows[0].to_regclass) {
-      console.log("Database tables verified via regclass.");
+      console.log("Database verified. Running incremental schema migrations...");
+      await client.query(`
+        ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]';
+        ALTER TABLE order_items ADD COLUMN IF NOT EXISTS selected_variant JSONB DEFAULT NULL;
+        ALTER TABLE categories ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0;
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';
+        ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_tx_ref VARCHAR(255) DEFAULT NULL;
+        CREATE TABLE IF NOT EXISTS sent_emails (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          to_email VARCHAR(255) NOT NULL,
+          subject VARCHAR(255) NOT NULL,
+          body TEXT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+      `);
+      console.log("Incremental migrations complete. Database tables verified.");
       isInitialized = true;
       return;
     }
@@ -218,6 +233,20 @@ async function initializeDatabase() {
         user_id UUID REFERENCES users(id),
         product_id VARCHAR(255) REFERENCES products(id),
         PRIMARY KEY (user_id, product_id)
+      );
+
+      ALTER TABLE products ADD COLUMN IF NOT EXISTS variants JSONB DEFAULT '[]';
+      ALTER TABLE order_items ADD COLUMN IF NOT EXISTS selected_variant JSONB DEFAULT NULL;
+      ALTER TABLE categories ADD COLUMN IF NOT EXISTS position INTEGER DEFAULT 0;
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(50) DEFAULT 'unpaid';
+      ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_tx_ref VARCHAR(255) DEFAULT NULL;
+
+      CREATE TABLE IF NOT EXISTS sent_emails (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        to_email VARCHAR(255) NOT NULL,
+        subject VARCHAR(255) NOT NULL,
+        body TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
     
@@ -714,13 +743,13 @@ app.get("/api/products/:id", async (req, res) => {
 app.post("/api/products", authenticateToken, isAdmin, async (req, res) => {
   const start = Date.now();
   try {
-    const { name, description, price, category, images, stock } = req.body;
+    const { name, description, price, category, images, stock, variants } = req.body;
     console.log(`Creating product: ${name}, ${images?.length || 0} images, Payload size approx: ${JSON.stringify(req.body).length} bytes`);
     
     const id = 'p' + Math.random().toString(36).substr(2, 9);
     const result = await getPool().query(
-      'INSERT INTO products (id, name, description, price, category, images, stock) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
-      [id, name, description, price, category, images, stock]
+      'INSERT INTO products (id, name, description, price, category, images, stock, variants) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *',
+      [id, name, description, price, category, images, stock, JSON.stringify(variants || [])]
     );
     console.log(`Product created successfully: ${id} in ${Date.now() - start}ms`);
     res.json(result.rows[0]);
@@ -730,16 +759,58 @@ app.post("/api/products", authenticateToken, isAdmin, async (req, res) => {
   }
 });
 
+app.post("/api/products/bulk", authenticateToken, isAdmin, async (req, res) => {
+  const start = Date.now();
+  try {
+    const { products } = req.body;
+    if (!products || !Array.isArray(products) || products.length === 0) {
+      return res.status(400).json({ error: "Products array is required and must not be empty" });
+    }
+    
+    const pool = getPool();
+    const insertedIds = [];
+    
+    for (const prod of products) {
+      const { name, description, price, category, images, stock, variants, tags, is_featured } = prod;
+      const id = 'p' + Math.random().toString(36).substr(2, 9);
+      
+      await pool.query(
+        `INSERT INTO products (id, name, description, price, category, images, stock, variants, tags, is_featured) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          id,
+          name || "Unnamed Product",
+          description || "",
+          price || 0.0,
+          category || "",
+          images || [],
+          stock || 0,
+          JSON.stringify(variants || []),
+          tags || [],
+          !!is_featured
+        ]
+      );
+      insertedIds.push(id);
+    }
+    
+    console.log(`Bulk inserted ${products.length} products in ${Date.now() - start}ms`);
+    res.json({ message: `Successfully imported ${products.length} products`, ids: insertedIds });
+  } catch (err: any) {
+    console.error("Bulk product creation error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put("/api/products/:id", authenticateToken, isAdmin, async (req, res) => {
   const start = Date.now();
   const productId = req.params.id;
   try {
-    const { name, description, price, category, images, stock } = req.body;
+    const { name, description, price, category, images, stock, variants } = req.body;
     console.log(`Updating product ${productId}: ${name}, ${images?.length || 0} images`);
     
     const result = await getPool().query(
-      'UPDATE products SET name = $1, description = $2, price = $3, category = $4, images = $5, stock = $6 WHERE id = $7 RETURNING *',
-      [name, description, price, category, images, stock, productId]
+      'UPDATE products SET name = $1, description = $2, price = $3, category = $4, images = $5, stock = $6, variants = $7 WHERE id = $8 RETURNING *',
+      [name, description, price, category, images, stock, JSON.stringify(variants || []), productId]
     );
     if (result.rows.length === 0) return res.status(404).json({ error: 'Product not found' });
     console.log(`Product updated successfully: ${productId} in ${Date.now() - start}ms`);
@@ -771,7 +842,7 @@ app.delete("/api/products/:id", authenticateToken, isAdmin, async (req, res) => 
 // Categories Routes
 app.get("/api/categories", async (req, res) => {
   try {
-    const result = await getPool().query("SELECT * FROM categories ORDER BY created_at ASC");
+    const result = await getPool().query("SELECT * FROM categories ORDER BY position ASC, created_at ASC");
     res.json(result.rows);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -780,13 +851,29 @@ app.get("/api/categories", async (req, res) => {
 
 app.post("/api/categories", authenticateToken, isAdmin, async (req, res) => {
   try {
-    const { name, icon, description } = req.body;
+    const { name, icon, description, position } = req.body;
     const id = 'c' + Math.random().toString(36).substr(2, 9);
     const result = await getPool().query(
-      'INSERT INTO categories (id, name, icon, description) VALUES ($1, $2, $3, $4) RETURNING *',
-      [id, name, icon, description]
+      'INSERT INTO categories (id, name, icon, description, position) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [id, name, icon, description, position || 0]
     );
     res.json(result.rows[0]);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/categories/reorder", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const { orders } = req.body;
+    if (!orders || !Array.isArray(orders)) {
+      return res.status(400).json({ error: "Orders array is required" });
+    }
+    const pool = getPool();
+    for (const item of orders) {
+      await pool.query('UPDATE categories SET position = $1 WHERE id = $2', [item.position, item.id]);
+    }
+    res.json({ message: "Categories reordered successfully" });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -810,6 +897,45 @@ app.delete("/api/categories/:id", authenticateToken, isAdmin, async (req, res) =
   try {
     await getPool().query('DELETE FROM categories WHERE id = $1', [req.params.id]);
     res.json({ message: 'Category deleted' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Email Notifications system helper
+async function sendEmailNotification(userId: string, orderId: string, subject: string, bodyText: string) {
+  try {
+    const userRes = await getPool().query('SELECT email FROM users WHERE id = $1', [userId]);
+    const email = userRes.rows[0]?.email || 'customer@example.com';
+    
+    await getPool().query(
+      'INSERT INTO sent_emails (to_email, subject, body) VALUES ($1, $2, $3)',
+      [email, subject, bodyText]
+    );
+    console.log(`[EMAIL-NOTIFICATION] Sent email to ${email}: "${subject}"`);
+  } catch (err) {
+    console.error('[EMAIL-NOTIFICATION] Failed to store sent/log email:', err);
+  }
+}
+
+app.get("/api/admin/emails", authenticateToken, isAdmin, async (req, res) => {
+  try {
+    const result = await getPool().query('SELECT * FROM sent_emails ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// User-specific Email Notifications history
+app.get("/api/emails", authenticateToken, async (req: any, res: any) => {
+  try {
+    const user = req.user;
+    const result = await getPool().query(
+      'SELECT * FROM sent_emails WHERE LOWER(to_email) = $1 ORDER BY created_at DESC',
+      [user.email.toLowerCase().trim()]
+    );
+    res.json(result.rows);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -867,11 +993,19 @@ app.get("/api/orders", authenticateToken, async (req: any, res: any) => {
         }
       }
       
+      const mappedItems = (row.items || []).map((item: any) => ({
+        ...item,
+        selectedVariant: item.selected_variant
+      }));
+      
       return {
         ...row,
         userId: row.user_id,
         totalAmount: Number(row.total),
         shippingAddress: shippingAddr,
+        paymentStatus: row.payment_status || 'unpaid',
+        paymentTxRef: row.payment_tx_ref,
+        items: mappedItems,
         createdAt: new Date(row.created_at).getTime(),
         updatedAt: new Date(row.created_at).getTime()
       };
@@ -908,21 +1042,24 @@ app.post("/api/orders", authenticateToken, async (req: any, res: any) => {
     const orderId = orderRes.rows[0].id;
     console.log(`[ORDER] Order record created: ${orderId}`);
     
-    console.log(`[ORDER] Inserting ${items.length} items...`);
+    console.log(`[ORDER] Inserting ${items.length} items with potential variants...`);
     const values: any[] = [];
     const placeholders = items.map((item: any, i: number) => {
-      const offset = i * 4;
-      values.push(orderId, item.id, item.quantity, item.price);
-      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4})`;
+      const offset = i * 5;
+      values.push(orderId, item.id, item.quantity, item.price, item.selectedVariant ? JSON.stringify(item.selectedVariant) : null);
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3}, $${offset + 4}, $${offset + 5})`;
     }).join(', ');
     
-    await client.query(`INSERT INTO order_items (order_id, product_id, quantity, price) VALUES ${placeholders}`, values);
+    await client.query(`INSERT INTO order_items (order_id, product_id, quantity, price, selected_variant) VALUES ${placeholders}`, values);
     
     await client.query('COMMIT');
     const duration = Date.now() - start;
     console.log(`[ORDER] Order ${orderId} committed successfully in ${duration}ms`);
     
     res.json({ id: orderId });
+    
+    // Send email notification of receipt
+    sendEmailNotification(userId, orderId, "Order Placed Successfully 🛍️", `Thank you for your order! Your order has been registered successfully on our platform.\n\nOrder ID: ${orderId}\nTotal: $${total}\n\nWe are preparing your items for shipment. You can track your order status live in your account portal!`);
 
     // Background notification
     (async () => {
@@ -978,7 +1115,20 @@ app.put("/api/orders/:id/status", authenticateToken, isAdmin, async (req: any, r
     if (result.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
     
     const updatedOrder = result.rows[0];
-    if (status === 'cancelled') {
+    const user_id = updatedOrder.user_id;
+    
+    if (status === 'shipped') {
+      sendEmailNotification(user_id, orderId, "Your Order Has Shipped! 🚚", `Great news! Your order ${orderId} has been shipped and is on its way to your destination.\n\nKeep an eye out for dynamic delivery updates!`);
+    } else if (status === 'delivered') {
+      sendEmailNotification(user_id, orderId, "Your Order Has Been Delivered! 🎉", `Success! Your order ${orderId} has been successfully delivered to your shipping address.\n\nThank you for shopping with us! Please come back soon.`);
+    } else if (status === 'confirmed') {
+      sendEmailNotification(user_id, orderId, "Order Confirmed 👍", `Your order ${orderId} is confirmed and is now being packaged by our team.`);
+    } else if (status === 'packed') {
+      sendEmailNotification(user_id, orderId, "Order Packed & Ready 📦", `Your order ${orderId} is fully packed and ready for carrier pickup.`);
+    } else if (status === 'out_for_delivery') {
+      sendEmailNotification(user_id, orderId, "Order Out for Delivery 🚴", `Your order ${orderId} is out for delivery and will arrive shortly!`);
+    } else if (status === 'cancelled') {
+      sendEmailNotification(user_id, orderId, "Order Cancelled ❌", `Your order ${orderId} has been cancelled.\n\nIf you have any questions or did not intend to cancel this order, please contact our support desk.`);
       sendTelegramNotification({
         orderId, 
         total: Number(updatedOrder.total), 
@@ -1032,6 +1182,103 @@ app.delete("/api/orders/:id", authenticateToken, async (req: any, res: any) => {
     res.json({ message: 'Order cancelled' });
   } catch (err: any) {
     console.error(`Order ${orderId} cancel error:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update order payment status (Admin action)
+app.put("/api/orders/:id/payment", authenticateToken, isAdmin, async (req: any, res: any) => {
+  const orderId = req.params.id;
+  const { payment_status } = req.body;
+  console.log(`Updating order ${orderId} payment status to ${payment_status}`);
+  try {
+    const result = await getPool().query(
+      'UPDATE orders SET payment_status = $1 WHERE id = $2 RETURNING *',
+      [payment_status, orderId]
+    );
+    if (result.rows.length === 0) return res.status(404).json({ error: 'Order not found' });
+    res.json(result.rows[0]);
+  } catch (err: any) {
+    console.error(`Update payment status error for order ${orderId}:`, err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Chapa Payments Integration & Simulation
+app.post("/api/payments/chapa/initialize", authenticateToken, async (req: any, res: any) => {
+  try {
+    const { orderId, amount, currency, email, firstName, lastName } = req.body;
+    const chapaKey = process.env.CHAPA_SECRET_KEY;
+    const txRef = 'tx-' + Math.random().toString(36).substr(2, 9);
+    
+    // Save tx_ref to order
+    await getPool().query('UPDATE orders SET payment_tx_ref = $1 WHERE id = $2', [txRef, orderId]);
+    
+    if (!chapaKey) {
+      console.log(`[CHAPA] Secret key missing. Running in simulation mode for order ${orderId}.`);
+      return res.json({
+        status: "success",
+        message: "Simulation mode active",
+        data: {
+          checkout_url: `/payment-simulation?tx_ref=${txRef}&orderId=${orderId}&amount=${amount}&currency=${currency || 'ETB'}`
+        }
+      });
+    }
+    
+    const response = await fetch("https://api.chapa.co/v1/transaction/initialize", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${chapaKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        amount,
+        currency: currency || 'ETB',
+        email,
+        first_name: firstName || 'Customer',
+        last_name: lastName || '',
+        tx_ref: txRef,
+        callback_url: `${req.protocol}://${req.get('host')}/api/payments/chapa/callback/${txRef}`,
+        return_url: `${req.protocol}://${req.get('host')}/orders`
+      })
+    });
+    
+    const data = await response.json();
+    if (data.status === 'success') {
+      res.json(data);
+    } else {
+      res.status(400).json({ error: data.message || "Chapa initialization failed" });
+    }
+  } catch (err: any) {
+    console.error("Chapa configuration error:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/payments/chapa/verify/:tx_ref", authenticateToken, async (req: any, res: any) => {
+  try {
+    const txRef = req.params.tx_ref;
+    const { status } = req.body;
+    
+    if (status === 'success') {
+      const orderRes = await getPool().query(
+        "UPDATE orders SET payment_status = 'paid' WHERE payment_tx_ref = $1 RETURNING *",
+        [txRef]
+      );
+      if (orderRes.rows.length > 0) {
+        const order = orderRes.rows[0];
+        sendEmailNotification(order.user_id, order.id, "Payment Successful 💳", `Thank you! We have received your payment of $${order.total} for order ${order.id} via Chapa.\n\nYour order is being processed for immediate shipment.`);
+        return res.json({ status: "success", message: "Order payment verified", order: orderRes.rows[0] });
+      }
+    } else if (status === 'failed') {
+      await getPool().query(
+        "UPDATE orders SET payment_status = 'failed' WHERE payment_tx_ref = $1",
+        [txRef]
+      );
+      return res.json({ status: "failed", message: "Payment was marked as failed" });
+    }
+    res.json({ status: "failed", message: "Verification failed or cancelled" });
+  } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });

@@ -8,7 +8,7 @@ import { useNavigate } from 'react-router-dom';
 import { CheckCircle2, ChevronRight, Truck, HandCoins, MapPin } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Separator } from '@/components/ui/separator';
-import { formatPrice } from '@/lib/utils';
+import { formatPrice, cn } from '@/lib/utils';
 import { PLACEHOLDER_IMAGE } from '@/lib/constants';
 
 const Checkout = () => {
@@ -16,6 +16,7 @@ const Checkout = () => {
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState(false);
   const [step, setStep] = useState(1);
+  const [paymentMethod, setPaymentMethod] = useState<'cod' | 'chapa'>('cod');
   const [formData, setFormData] = useState({
     fullName: user?.displayName || '',
     phone: user?.shippingPhone || '',
@@ -59,7 +60,8 @@ const Checkout = () => {
         items: cart.map(item => ({
           id: item.id,
           quantity: item.quantity,
-          price: item.price
+          price: item.selectedVariant?.price || item.price,
+          selectedVariant: item.selectedVariant
         })),
         total,
         shippingAddress: {
@@ -92,6 +94,36 @@ const Checkout = () => {
         throw new Error(errData.error || 'Order taking failed');
       }
       
+      const resData = await res.json();
+      const orderId = resData.id;
+
+      if (paymentMethod === 'chapa') {
+        const initRes = await fetch('/api/payments/chapa/initialize', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({
+            orderId,
+            amount: total,
+            email: user?.email || 'customer@example.com',
+            firstName: formData.fullName.split(' ')[0] || 'Customer',
+            lastName: formData.fullName.split(' ').slice(1).join(' ') || ''
+          })
+        });
+
+        if (!initRes.ok) {
+          throw new Error('Chapa payment initialization failed');
+        }
+
+        const initData = await initRes.json();
+        clearCart();
+        toast.success('Redirecting to Chapa payment portal...');
+        window.location.href = initData.data.checkout_url;
+        return;
+      }
+
       clearCart();
       toast.success('Ameseginalen! Order placed successfully!');
       setStep(3);
@@ -209,14 +241,59 @@ const Checkout = () => {
                    <h2 className="text-xl font-black uppercase">Payment Mode</h2>
                 </div>
 
-                <div className="p-4 rounded-xl border border-primary/20 bg-primary/5 space-y-2">
-                   <div className="flex items-center justify-between">
-                      <p className="font-bold">Cash on Delivery</p>
-                      <CheckCircle2 className="w-5 h-5 text-primary" />
-                   </div>
-                   <p className="text-xs text-muted-foreground leading-relaxed">
-                     Simple and safe. Pay only when you receive your items at your doorstep. We currently only support COD for your safety.
-                   </p>
+                <div className="grid grid-cols-1 gap-3">
+                  {/* Cash on Delivery option */}
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('cod')}
+                    className={cn(
+                      "p-4 rounded-xl border text-left transition-all duration-200 outline-none flex flex-col gap-1.5 w-full",
+                      paymentMethod === 'cod' 
+                        ? "border-primary bg-primary/5 shadow-md"
+                        : "border-white/10 hover:border-white/20 bg-white/5"
+                    )}
+                  >
+                    <div className="flex items-center justify-between pointer-events-none">
+                      <p className="font-bold text-sm">Cash on Delivery</p>
+                      <div className={cn(
+                        "w-4 h-4 rounded-full border flex items-center justify-center",
+                        paymentMethod === 'cod' ? "border-primary bg-primary text-black" : "border-white/25"
+                      )}>
+                        {paymentMethod === 'cod' && <div className="w-1.5 h-1.5 bg-black rounded-full" />}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed pointer-events-none">
+                      Simple and safe. Pay only when you receive your items at your doorstep in Addis Ababa.
+                    </p>
+                  </button>
+
+                  {/* Chapa option */}
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('chapa')}
+                    className={cn(
+                      "p-4 rounded-xl border text-left transition-all duration-200 outline-none flex flex-col gap-1.5 w-full",
+                      paymentMethod === 'chapa' 
+                        ? "border-primary bg-primary/5 shadow-md"
+                        : "border-white/10 hover:border-white/20 bg-white/5"
+                    )}
+                  >
+                    <div className="flex items-center justify-between pointer-events-none">
+                      <div className="flex items-center gap-2">
+                        <p className="font-bold text-sm">Chapa Online Payment</p>
+                        <span className="bg-yellow-500/10 text-yellow-500 text-[8px] font-black uppercase px-2 py-0.5 rounded tracking-wide">Ethiopia</span>
+                      </div>
+                      <div className={cn(
+                        "w-4 h-4 rounded-full border flex items-center justify-center",
+                        paymentMethod === 'chapa' ? "border-primary bg-primary text-black" : "border-white/25"
+                      )}>
+                        {paymentMethod === 'chapa' && <div className="w-1.5 h-1.5 bg-black rounded-full" />}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground leading-relaxed pointer-events-none">
+                      Pay now securely with Telebirr, CBE Birr, Chapa, cards, and more local Ethiopian methods.
+                    </p>
+                  </button>
                 </div>
 
                 <div className="space-y-4 pt-4 border-t border-white/5">
@@ -250,17 +327,22 @@ const Checkout = () => {
             <h2 className="text-sm font-black uppercase tracking-tight mb-4">Summary</h2>
             <div className="space-y-3 max-h-48 overflow-y-auto pr-2 no-scrollbar">
               {cart.map((item) => (
-                <div key={item.id} className="flex justify-between items-center text-xs">
+                <div key={item.id + (item.selectedVariant ? '-' + item.selectedVariant.id : '')} className="flex justify-between items-center text-xs">
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-lg overflow-hidden glass border border-white/5">
                       <img src={item.images?.[0] || PLACEHOLDER_IMAGE} alt={item.name} className="w-full h-full object-cover" />
                     </div>
                     <div>
                       <p className="font-bold line-clamp-1">{item.name}</p>
-                      <p className="text-[8px] font-medium text-muted-foreground uppercase">{item.quantity} × {formatPrice(item.price)}</p>
+                      {item.selectedVariant && (
+                        <p className="text-[7px] text-primary font-black uppercase tracking-wider">
+                          Size: {item.selectedVariant.size} | Color: {item.selectedVariant.color}
+                        </p>
+                      )}
+                      <p className="text-[8px] font-medium text-muted-foreground uppercase">{item.quantity} × {formatPrice(item.selectedVariant?.price || item.price)}</p>
                     </div>
                   </div>
-                  <span className="font-bold">{formatPrice(item.price * item.quantity)}</span>
+                  <span className="font-bold">{formatPrice((item.selectedVariant?.price || item.price) * item.quantity)}</span>
                 </div>
               ))}
             </div>

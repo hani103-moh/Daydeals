@@ -16,7 +16,9 @@ import {
   Scissors, 
   MoreHorizontal,
   Save,
-  X
+  X,
+  ArrowUp,
+  ArrowDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
@@ -37,6 +39,39 @@ const CategoriesAdmin = () => {
   const [isEditing, setIsEditing] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Category>>({});
   const [isAdding, setIsAdding] = useState(false);
+
+  const handleReorder = async (currentIndex: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= categories.length) return;
+
+    const list = [...categories];
+    const temp = list[currentIndex];
+    list[currentIndex] = list[targetIndex];
+    list[targetIndex] = temp;
+
+    const orders = list.map((cat, index) => ({
+      id: cat.id,
+      position: index
+    }));
+
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/categories/reorder', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ orders })
+      });
+
+      if (!res.ok) throw new Error('Failed to update pos');
+      toast.success('Category order updated!');
+      fetchCategories();
+    } catch (err) {
+      toast.error('Could not save category ordering');
+    }
+  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -164,7 +199,7 @@ const CategoriesAdmin = () => {
             </motion.div>
           )}
 
-          {categories.map((cat) => (
+          {categories.map((cat, idx) => (
             <motion.div
               key={cat.id}
               layout
@@ -185,7 +220,7 @@ const CategoriesAdmin = () => {
                 {cat.description}
               </p>
               
-              <div className="mt-6 flex gap-2">
+              <div className="mt-6 flex gap-2 items-center">
                  <Button 
                    variant="ghost" 
                    size="sm" 
@@ -197,6 +232,30 @@ const CategoriesAdmin = () => {
                  >
                    <Edit2 className="mr-1.5 w-3.5 h-3.5" /> Edit
                  </Button>
+                 
+                 <div className="flex gap-1">
+                   <Button
+                     type="button"
+                     variant="ghost"
+                     size="icon"
+                     className="h-9 w-9 p-0 rounded-lg bg-muted/30 hover:bg-primary/10 text-muted-foreground hover:text-primary"
+                     disabled={idx === 0}
+                     onClick={() => handleReorder(idx, 'up')}
+                   >
+                     <ArrowUp className="w-3.5 h-3.5" />
+                   </Button>
+                   <Button
+                     type="button"
+                     variant="ghost"
+                     size="icon"
+                     className="h-9 w-9 p-0 rounded-lg bg-muted/30 hover:bg-primary/10 text-muted-foreground hover:text-primary"
+                     disabled={idx === categories.length - 1}
+                     onClick={() => handleReorder(idx, 'down')}
+                   >
+                     <ArrowDown className="w-3.5 h-3.5" />
+                   </Button>
+                 </div>
+
                  <Button 
                    variant="ghost" 
                    size="sm" 

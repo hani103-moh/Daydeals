@@ -18,6 +18,7 @@ const Profile = lazy(() => import('@/pages/Profile'));
 const ForgotPassword = lazy(() => import('@/pages/ForgotPassword'));
 const ResetPassword = lazy(() => import('@/pages/ResetPassword'));
 const AdminDashboard = lazy(() => import('@/pages/admin/Dashboard'));
+const PaymentSimulation = lazy(() => import('@/pages/PaymentSimulation'));
 
 const LoadingFallback = () => (
   <div className="container mx-auto px-4 py-8 space-y-8">
@@ -73,6 +74,11 @@ const AppContent = () => {
               <Route path="/checkout" element={
                 <ProtectedRoute>
                   <Checkout />
+                </ProtectedRoute>
+              } />
+              <Route path="/payment-simulation" element={
+                <ProtectedRoute>
+                  <PaymentSimulation />
                 </ProtectedRoute>
               } />
               <Route path="/admin/*" element={

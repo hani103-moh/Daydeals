@@ -61,6 +61,23 @@ const Home = () => {
     return filtered;
   }, [searchTerm, selectedCategory, sortBy, products]);
 
+  const [recentlyViewedIds, setRecentlyViewedIds] = useState<string[]>([]);
+  
+  useEffect(() => {
+    try {
+      const existingRaw = localStorage.getItem('recently-viewed');
+      if (existingRaw) {
+        setRecentlyViewedIds(JSON.parse(existingRaw));
+      }
+    } catch (e) {
+      console.error('Failed to parse recently viewed on home page:', e);
+    }
+  }, []);
+
+  const recentlyViewedProducts = useMemo(() => {
+    return products.filter(p => recentlyViewedIds.includes(p.id)).slice(0, 6);
+  }, [recentlyViewedIds, products]);
+
   return (
     <div className="pb-20 space-y-8">
       {/* Hero Section - Compact for Mobile */}
@@ -233,6 +250,21 @@ const Home = () => {
           </>
         )}
       </section>
+
+      {/* Recently Viewed Products section */}
+      {recentlyViewedProducts.length > 0 && (
+        <section className="container mx-auto px-4 py-8 space-y-4">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-5 h-5 text-primary" />
+            <h2 className="text-xl font-black uppercase tracking-tight">Your Recently <span className="text-primary">Viewed</span></h2>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2 md:gap-4">
+            {recentlyViewedProducts.map((product) => (
+              <ProductCard key={product.id} product={product} />
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Stay Tuned Section */}
       <section className="container mx-auto px-4 py-20 text-center">
