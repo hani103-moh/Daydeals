@@ -51,23 +51,23 @@
 }
 
 :root {
-    --background: oklch(1 0 0); /* Pure White */
-    --foreground: oklch(0 0 0); /* Pure Black */
-    --card: oklch(1 0 0); /* Crisp Pure White */
-    --card-foreground: oklch(0 0 0);
+    --background: oklch(0.99 0 0); /* Alabaster soft luxury white */
+    --foreground: oklch(0.12 0 0); /* Obsidian deep charcoal black */
+    --card: oklch(1 0 0); /* Pure White */
+    --card-foreground: oklch(0.12 0 0);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0 0 0);
+    --popover-foreground: oklch(0.12 0 0);
     --primary: oklch(0 0 0); /* absolute black */
     --primary-foreground: oklch(1 0 0); /* pure white */
-    --secondary: oklch(0.96 0 0); /* very faint gray */
-    --secondary-foreground: oklch(0.15 0 0);
-    --accent: oklch(0.1 0 0); /* charcoal black */
+    --secondary: oklch(0.96 0 0); /* soft light gray */
+    --secondary-foreground: oklch(0.2 0 0);
+    --accent: oklch(0.15 0 0); /* sleek dark charcoal */
     --accent-foreground: oklch(1 0 0);
     --muted: oklch(0.96 0 0);
-    --muted-foreground: oklch(0.4 0 0);
-    --border: oklch(0.9 0 0); /* hairline border */
-    --input: oklch(0.9 0 0);
-    --ring: oklch(0 0 0 / 0.25);
+    --muted-foreground: oklch(0.45 0 0);
+    --border: oklch(0.92 0 0); /* fine hairline borders */
+    --input: oklch(0.92 0 0);
+    --ring: oklch(0 0 0 / 0.15);
     --radius: 8px; /* sharp, premium modern radius */
 }
 
