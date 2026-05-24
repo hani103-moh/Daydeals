@@ -51,43 +51,51 @@
 }
 
 :root {
-    --background: oklch(0.98 0.01 24);
-    --foreground: oklch(0.15 0.02 24);
-    --card: oklch(1 0 0 / 0.7);
-    --card-foreground: oklch(0.15 0.02 24);
-    --popover: oklch(1 0 0 / 0.9);
-    --popover-foreground: oklch(0.15 0.02 24);
-    --primary: oklch(0.55 0.22 24); /* Warm Rich Crimson */
-    --primary-foreground: oklch(0.99 0.01 24); /* Clean Soft White */
-    --secondary: oklch(0.88 0.12 75); /* Warm Radiant Soft Gold */
-    --accent: oklch(0.58 0.20 28); /* Warm Rich Red */
-    --radius: 12px;
+    --background: oklch(1 0 0); /* Pure White */
+    --foreground: oklch(0 0 0); /* Pure Black */
+    --card: oklch(1 0 0); /* Crisp Pure White */
+    --card-foreground: oklch(0 0 0);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0 0 0);
+    --primary: oklch(0 0 0); /* absolute black */
+    --primary-foreground: oklch(1 0 0); /* pure white */
+    --secondary: oklch(0.96 0 0); /* very faint gray */
+    --secondary-foreground: oklch(0.15 0 0);
+    --accent: oklch(0.1 0 0); /* charcoal black */
+    --accent-foreground: oklch(1 0 0);
+    --muted: oklch(0.96 0 0);
+    --muted-foreground: oklch(0.4 0 0);
+    --border: oklch(0.9 0 0); /* hairline border */
+    --input: oklch(0.9 0 0);
+    --ring: oklch(0 0 0 / 0.25);
+    --radius: 8px; /* sharp, premium modern radius */
 }
 
 .tilet-pattern {
-  background-image: repeating-linear-gradient(45deg, var(--primary) 0, var(--primary) 2px, transparent 0, transparent 50%);
-  background-size: 10px 10px;
-  opacity: 0.15;
+  background-image: repeating-linear-gradient(45deg, var(--primary) 0, var(--primary) 1px, transparent 0, transparent 50%);
+  background-size: 8px 8px;
+  opacity: 0.04;
 }
 
 .dark {
-    --background: oklch(0.11 0.02 24);
-    --foreground: oklch(0.97 0.01 24);
-    --card: oklch(0.15 0.02 24 / 0.75);
-    --card-foreground: oklch(0.97 0.01 24);
-    --popover: oklch(0.14 0.03 24 / 0.9);
-    --popover-foreground: oklch(0.97 0.01 24);
-    --primary: oklch(0.60 0.22 24); /* Radiant Crimson for Dark Mode */
-    --primary-foreground: oklch(0.99 0.01 24); /* Light high contrast white */
-    --secondary: oklch(0.85 0.11 75); /* Soft Golden contrast accent */
-    --accent: oklch(0.62 0.21 24);
-    --muted: oklch(0.16 0.02 24);
-    --muted-foreground: oklch(0.68 0.02 24);
-    --accent-foreground: oklch(0.85 0.11 75);
-    --destructive: oklch(0.52 0.2 25);
-    --border: oklch(1 0 0 / 10%);
+    --background: oklch(0.08 0 0); /* deep slate/obsidian black */
+    --foreground: oklch(1 0 0); /* pure white */
+    --card: oklch(0.12 0 0); /* solid dark gray */
+    --card-foreground: oklch(1 0 0);
+    --popover: oklch(0.12 0 0);
+    --popover-foreground: oklch(1 0 0);
+    --primary: oklch(1 0 0); /* absolute white */
+    --primary-foreground: oklch(0 0 0); /* pure black */
+    --secondary: oklch(0.18 0 0); /* deep charcoal */
+    --secondary-foreground: oklch(0.95 0 0);
+    --accent: oklch(0.9 0 0); /* absolute white accent */
+    --accent-foreground: oklch(0.08 0 0);
+    --muted: oklch(0.16 0 0);
+    --muted-foreground: oklch(0.55 0 0);
+    --destructive: oklch(0.5 0.15 15);
+    --border: oklch(1 0 0 / 12%);
     --input: oklch(1 0 0 / 12%);
-    --ring: oklch(0.60 0.22 24 / 0.5);
+    --ring: oklch(1 0 0 / 0.4);
 }
 
 @layer base {
@@ -95,23 +103,8 @@
     @apply border-border outline-ring/50 transition-colors duration-150;
   }
   body {
-    @apply bg-background text-foreground selection:bg-primary/20 min-h-screen relative overflow-x-hidden;
+    @apply bg-background text-foreground selection:bg-foreground/10 min-h-screen relative overflow-x-hidden;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-  }
-  /* Decorative elegant mesh background pattern */
-  body::before {
-    content: '';
-    position: absolute;
-    width: 600px;
-    height: 600px;
-    top: -300px;
-    right: -200px;
-    border-radius: 50%;
-    background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
-    opacity: 0.1;
-    filter: blur(80px);
-    pointer-events: none;
-    z-index: -10;
   }
 }
 

@@ -87,7 +87,7 @@ const Home = () => {
           <img 
             src="https://images.unsplash.com/photo-1586880244406-556ebe35f282?q=80&w=1200&auto=format&fit=crop" 
             alt="Merkato Marketplace" 
-            className="w-full h-full object-cover scale-105 hover:scale-110 transition-transform duration-10000"
+            className="w-full h-full object-cover scale-105 hover:scale-110 transition-transform duration-10000 grayscale contrast-115 brightness-90"
           />
         </div>
 
