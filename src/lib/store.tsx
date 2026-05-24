@@ -158,7 +158,7 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     }
   };
 
-  const fetchAuth = async () => {
+  const fetchAuth = async (retryCount = 0) => {
     const token = localStorage.getItem('token');
     if (token) {
       try {
@@ -174,6 +174,10 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.warn('Auth token expired or invalid, logging out');
           localStorage.removeItem('token');
           setUser(null);
+        } else if (res.status === 429 && retryCount < 3) {
+          console.warn(`Auth check rate limited (429). Retrying in 2.5s... (Attempt ${retryCount + 1}/3)`);
+          setTimeout(() => fetchAuth(retryCount + 1), 2500);
+          return; // Skip setting loading to false while we retry
         } else {
           console.error(`Auth check failed with status ${res.status}`);
           // Don't remove token for 500/503 errors as the server might just be busy
@@ -205,6 +209,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       } else if (res.status === 503 && retryCount < 10) {
         console.warn(`Database is still initializing (503) for categories. Retrying in 1s... (Attempt ${retryCount + 1}/10)`);
         setTimeout(() => fetchCategories(retryCount + 1), 1000);
+      } else if (res.status === 429 && retryCount < 5) {
+        console.warn(`Categories fetch rate limited (429). Retrying in 2s... (Attempt ${retryCount + 1}/5)`);
+        setTimeout(() => fetchCategories(retryCount + 1), 2000);
       } else {
         const text = await res.text();
         console.error('Fetch categories failed:', text);
@@ -246,6 +253,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         // DB is likely still initializing
         console.warn(`Database is still initializing (503). Retrying in 1s... (Attempt ${retryCount + 1}/10)`);
         setTimeout(() => fetchProducts(full, retryCount + 1), 1000);
+      } else if (res.status === 429 && retryCount < 5) {
+        console.warn(`Products fetch rate limited (429). Retrying in 2s... (Attempt ${retryCount + 1}/5)`);
+        setTimeout(() => fetchProducts(full, retryCount + 1), 2000);
       } else {
         const text = await res.text();
         console.error('Fetch products failed:', text);

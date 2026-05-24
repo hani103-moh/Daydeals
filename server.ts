@@ -1385,12 +1385,12 @@ async function startServer() {
     // 3. Final SPA Fallback
     app.get('*', (req, res, next) => {
       // API 404
-      if (req.url.startsWith('/api')) {
+      if (req.path.startsWith('/api')) {
         return res.status(404).json({ error: 'API route not found' });
       }
       
       // Asset 404
-      if (/\.(js|css|json|png|jpg|jpeg|gif|svg|ico|map|ts|tsx|woff|woff2|ttf)$/i.test(req.url)) {
+      if (/\.(js|css|json|png|jpg|jpeg|gif|svg|ico|map|ts|tsx|woff|woff2|ttf)$/i.test(req.path)) {
         return res.status(404).send('Resource not found');
       }
 
