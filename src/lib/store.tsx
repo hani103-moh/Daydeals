@@ -31,6 +31,80 @@ interface StoreContextType {
 
 const StoreContext = createContext<StoreContextType | undefined>(undefined);
 
+const FALLBACK_PRODUCTS: Product[] = [
+  {
+    id: 'p1',
+    name: 'Premium Handwoven Habesha Kemis',
+    description: 'An exquisite traditional white dress with beautifully handwoven Tilat pattern borders. Perfect for holidays, weddings, and special cultural occasions.',
+    price: 180.00,
+    category: 'Traditional Garments',
+    images: ['https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=800&q=80'],
+    stock: 50,
+    rating: 4.9,
+    reviewsCount: 124,
+    sold_count: 35,
+    tags: ['clothing', 'traditional', 'dress', 'premium'],
+    isFeatured: true,
+    createdAt: Date.now() - 86400000 * 5,
+    updatedAt: Date.now() - 86400000 * 5
+  },
+  {
+    id: 'p2',
+    name: 'Authentic Addis Berbere Spice (500g)',
+    description: 'Sourced directly from the bustling spice stalls of Merkato, this organic Berbere spice blend is made from dried red chilies, fenugreek, garlic, and ginger. Ideal for authentic Doro Wat.',
+    price: 18.50,
+    category: 'Spices & Ingredients',
+    images: ['https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&q=80'],
+    stock: 150,
+    rating: 4.8,
+    reviewsCount: 89,
+    sold_count: 112,
+    tags: ['spices', 'cooking', 'organic', 'authentic'],
+    isFeatured: false,
+    createdAt: Date.now() - 86400000 * 10,
+    updatedAt: Date.now() - 86400000 * 10
+  },
+  {
+    id: 'p3',
+    name: 'Yirgacheffe Specialty Roasted Coffee (1kg)',
+    description: 'Medium-roasted highland Arabica beans from the historic Yirgacheffe region. Features dynamic floral notes, citrus undertones, and a remarkably clean body.',
+    price: 26.90,
+    category: 'Organic Coffee',
+    images: ['https://images.unsplash.com/photo-1447933601403-0c6688de566e?w=800&q=80'],
+    stock: 200,
+    rating: 5.0,
+    reviewsCount: 56,
+    sold_count: 84,
+    tags: ['coffee', 'beverage', 'roasted', 'yirgacheffe'],
+    isFeatured: true,
+    createdAt: Date.now() - 86400000 * 3,
+    updatedAt: Date.now() - 86400000 * 3
+  },
+  {
+    id: 'p4',
+    name: 'Handcrafted Clay Jebena Coffee Pot',
+    description: 'Authentic traditional clay Ethiopian Jebena pot. Beautifully handcrafted by expert artisans, complete with premium straw ring stand (Mat). Perfect for authentic brewing.',
+    price: 34.00,
+    category: 'Cultural Crafts',
+    images: ['https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&q=80'],
+    stock: 75,
+    rating: 4.7,
+    reviewsCount: 210,
+    sold_count: 42,
+    tags: ['craft', 'coffee', 'home', 'artisan'],
+    isFeatured: false,
+    createdAt: Date.now() - 86400000 * 15,
+    updatedAt: Date.now() - 86400000 * 15
+  }
+];
+
+const FALLBACK_CATEGORIES: Category[] = [
+  { id: 'c1', name: 'Traditional Garments', icon: 'Shirt', description: 'Exquisite Habesha Kemis, Kuta, and modern Ethiopian fusion fashion', position: 1 },
+  { id: 'c2', name: 'Spices & Ingredients', icon: 'Sparkles', description: 'Authentic Berbere, Mitmita, Shiro, and rich local blends', position: 2 },
+  { id: 'c3', name: 'Organic Coffee', icon: 'Home', description: 'Premium, raw, and roasted Ethiopian specialty coffee beans', position: 3 },
+  { id: 'c4', name: 'Cultural Crafts', icon: 'Scissors', description: 'Handmade woven baskets, traditional clay Jebena pots, and cultural art', position: 4 }
+];
+
 export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -122,7 +196,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (res.ok) {
         const data = await res.json();
         console.log('Categories fetched:', data);
-        setCategories(data);
+        if (data && data.length > 0) {
+          setCategories(data);
+        } else {
+          console.warn('Backend returned empty categories. Using premium offline fallback.');
+          setCategories(FALLBACK_CATEGORIES);
+        }
       } else if (res.status === 503 && retryCount < 10) {
         console.warn(`Database is still initializing (503) for categories. Retrying in 1s... (Attempt ${retryCount + 1}/10)`);
         setTimeout(() => fetchCategories(retryCount + 1), 1000);
@@ -132,6 +211,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         if (retryCount < 2 && res.status >= 500) {
           console.log(`Retrying fetch categories (${retryCount + 1})...`);
           setTimeout(() => fetchCategories(retryCount + 1), 2000);
+        } else {
+          console.log('Using fallback categories due to fetch failure');
+          setCategories(FALLBACK_CATEGORIES);
         }
       }
     } catch (err) {
@@ -139,6 +221,9 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (retryCount < 2) {
         console.log(`Retrying fetch categories after error (${retryCount + 1})...`);
         setTimeout(() => fetchCategories(retryCount + 1), 2000);
+      } else {
+        console.log('Using fallback categories due to network error');
+        setCategories(FALLBACK_CATEGORIES);
       }
     }
   };
@@ -150,7 +235,12 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       if (res.ok) {
         const data = await res.json();
         console.log('Products fetched:', data.length);
-        setProducts(data);
+        if (data && data.length > 0) {
+          setProducts(data);
+        } else {
+          console.warn('Backend returned empty products. Using premium offline fallback.');
+          setProducts(FALLBACK_PRODUCTS);
+        }
         setDbLoading(false);
       } else if (res.status === 503 && retryCount < 10) {
         // DB is likely still initializing
@@ -163,6 +253,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           console.log(`Retrying fetch products (${retryCount + 1})...`);
           setTimeout(() => fetchProducts(full, retryCount + 1), 2000);
         } else {
+          console.log('Using fallback products due to fetch failure');
+          setProducts(FALLBACK_PRODUCTS);
           setDbLoading(false);
         }
       }
@@ -172,6 +264,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         console.log(`Retrying fetch products after error (${retryCount + 1})...`);
         setTimeout(() => fetchProducts(full, retryCount + 1), 2000);
       } else {
+        console.log('Using fallback products due to network error');
+        setProducts(FALLBACK_PRODUCTS);
         setDbLoading(false);
       }
       

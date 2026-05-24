@@ -1341,8 +1341,9 @@ async function startServer() {
   const resolvedDistPath = path.resolve(process.cwd(), 'dist');
   const distExists = fs.existsSync(resolvedDistPath) && fs.existsSync(path.join(resolvedDistPath, 'index.html'));
   
-  // Detect production mode
-  const isProduction = process.env.NODE_ENV === 'production' || distExists;
+  // Detect production mode (compiled server runs from dist, dev uses tsx server.ts)
+  const isDevScript = process.argv.some(arg => arg.includes('server.ts') || arg.includes('tsx'));
+  const isProduction = process.env.NODE_ENV === 'production' || !isDevScript;
 
   console.log(`\n--- SERVER STARTUP SEQUENCE ---`);
   console.log(`[BOOT] Time: ${new Date().toISOString()}`);
