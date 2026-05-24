@@ -18,14 +18,96 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('[CRITICAL-ERROR] Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Neon Connection String Handling
-const neonUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL || 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
+// Supabase Connection String Handling (Option 2) - Supports standard PostgreSQL
+const databaseUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+
+let isDbConnectionBlocked = false;
+let dbInitError: any = null;
+let dbInitAttempts = 0;
+
+function maskConnectionString(url: string): string {
+  try {
+    const parsed = new URL(url);
+    const maskedPass = parsed.password ? "******" : "";
+    let hostname = parsed.hostname;
+    if (hostname.length > 6) {
+      hostname = hostname.substring(0, 3) + "..." + hostname.substring(hostname.length - 3);
+    }
+    return `${parsed.protocol}//${parsed.username}${maskedPass ? ":" + maskedPass : ""}@${hostname}${parsed.port ? ":" + parsed.port : ""}${parsed.pathname}${parsed.search}`;
+  } catch {
+    if (!url) return "empty";
+    if (url.length <= 15) return "Invalid Connection String format";
+    return url.substring(0, 10) + "..." + url.substring(url.length - 8);
+  }
+}
+
+function diagnoseDatabaseUrl(url: string) {
+  if (!url) return;
+  
+  const placeholders = ["[password]", "<password>", "[db-host]", "<db-host>", "[dbname]", "[user]", "<user>"];
+  const foundPlaceholders = placeholders.filter(p => url.includes(p));
+  if (foundPlaceholders.length > 0) {
+    console.error(`🔴 [DB-CRITICAL-CONFIG] Your DATABASE_URL contains unreplaced placeholder strings: ${foundPlaceholders.join(', ')}.`);
+    console.error(`👉 ACTION REQUIRED: Open your settings menu and update DATABASE_URL. Replace all brackets and placeholder text with your actual database details.`);
+    return;
+  }
+
+  try {
+    const parsed = new URL(url);
+    const password = parsed.password;
+
+    if (password) {
+      const decodedPassword = decodeURIComponent(password);
+      if (decodedPassword === password) {
+        // Check for special characters in password that must be URL encoded (including asterisks *)
+        const specialChars = /[#$&+,/:;=?@\[\]*]/;
+        if (specialChars.test(password)) {
+          console.warn(`⚠️ [DB-WARNING-CONFIG] Your database password contains special characters (${password.match(specialChars)?.[0]}) but is NOT URL-encoded!`);
+          console.warn(`👉 ACTION REQUIRED: If your password contains special characters, you MUST URL-encode them inside the connection string.`);
+          console.warn(`   Common replacements:`);
+          console.warn(`   - '*' (Asterisk)  -->  replace with '%2A'`);
+          console.warn(`   - '@' (At sign)   -->  replace with '%40'`);
+          console.warn(`   - '#' (Hash)      -->  replace with '%23'`);
+          console.warn(`   - '+' (Plus)      -->  replace with '%2B'`);
+          console.warn(`   - '?' (Question)  -->  replace with '%3F'`);
+          console.warn(`   - ':' (Colon)     -->  replace with '%3A'`);
+          console.warn(`   Example: if password is "My*Pass@123", write it in the URL as: "My%2APass%40123"`);
+        }
+      }
+    }
+    
+    if (parsed.port === "5432" && (url.includes("supabase.co") || url.includes("supabase.net"))) {
+      console.log("ℹ️ [DB-INFO] Connecting via Port 5432 (direct connections). Note: Supabase recommends using Port 6543 (Connection Pooler) for stable serverless pooling.");
+    }
+  } catch (err) {
+    console.warn("⚠️ [DB-WARNING-CONFIG] DATABASE_URL cannot be parsed as a standard URL format. PostgreSQL will try parsing it directly.", err instanceof Error ? err.message : '');
+  }
+}
 
 let _pool: Pool | null = null;
 function getPool() {
+  if (isDbConnectionBlocked) {
+    const errorMsg = dbInitError ? (dbInitError.message || dbInitError) : "Database connection attempts are suspended due to previous authentication failures.";
+    console.error(`🚨 [DB-CRITICAL] Blocked connection request to prevent further database bans: ${errorMsg}`);
+    throw new Error(`[DB Connection Blocked] Last error: "${errorMsg}". Please check and correct your DATABASE_URL in your Settings panel, then restart the server.`);
+  }
   if (!_pool) {
-    const connectionString = (neonUrl && neonUrl.startsWith('postgres')) ? neonUrl : neonUrl;
-    console.log("[DB] Initializing Postgres Pool...");
+    const fallbackUrl = 'postgresql://neondb_owner:npg_v9xk7nlEJbjz@ep-weathered-dawn-apantfwu-pooler.c-7.us-east-1.aws.neon.tech/neondb?sslmode=require';
+    const connectionString = databaseUrl || fallbackUrl;
+    
+    if (!databaseUrl) {
+      console.warn("⚠️ [DB-WARNING] DATABASE_URL env variable is NOT set! Falling back to the default Neon PostgreSQL database.");
+      console.log("[DB] Connecting to fallback: Neon");
+    } else {
+      console.log(`📡 [DB] Initializing custom database pool with: ${maskConnectionString(databaseUrl)}`);
+      diagnoseDatabaseUrl(databaseUrl);
+      if (connectionString.includes("supabase.co") || connectionString.includes("supabase.net")) {
+        console.log("🟢 [DB-INFO] Target Host: Supabase.");
+      } else {
+        console.log("🔵 [DB-INFO] Target Host: Custom PostgreSQL.");
+      }
+    }
+
     _pool = new Pool({
       connectionString,
       max: 10, 
@@ -43,6 +125,9 @@ function getPool() {
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
 async function initializeDatabase() {
+  if (isDbConnectionBlocked) {
+    throw dbInitError || new Error("Database connection is currently blocked due to previous authentication failures.");
+  }
   const pool = getPool();
   let client;
   
@@ -144,10 +229,10 @@ async function initializeDatabase() {
       console.log("Seeding categories...");
       await client.query(`
         INSERT INTO categories (id, name, icon, description) VALUES
-        ('c1', 'Electronics', 'Smartphone', 'Tech gadgets and devices'),
-        ('c2', 'Clothing', 'Shirt', 'Modern fashion for everyone'),
-        ('c3', 'Home', 'Home', 'Essential household items'),
-        ('c4', 'Beauty', 'Sparkles', 'Cosmetics and skincare')
+        ('c1', 'Traditional Garments', 'Shirt', 'Exquisite Habesha Kemis, Kuta, and modern Ethiopian fusion fashion'),
+        ('c2', 'Spices & Ingredients', 'Sparkles', 'Authentic Berbere, Mitmita, Shiro, and rich local blends'),
+        ('c3', 'Organic Coffee', 'Home', 'Premium, raw, and roasted Ethiopian specialty coffee beans'),
+        ('c4', 'Cultural Crafts', 'Scissors', 'Handmade woven baskets, traditional clay Jebena pots, and cultural art')
       `);
     }
 
@@ -155,10 +240,10 @@ async function initializeDatabase() {
       console.log("Seeding products...");
       await client.query(`
         INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
-        ('p1', 'Premium Wireless Headphones', 'High-quality sound with noise cancellation.', 199.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=800&q=80'], 50, 4.8, 124, ARRAY['audio', 'wireless', 'premium'], true),
-        ('p2', 'Minimalist Watch', 'Elegant design for every occasion.', 129.50, 'Clothing', ARRAY['https://images.unsplash.com/photo-1523275335684-37898b6baf30?w=800&q=80'], 100, 4.5, 89, ARRAY['fashion', 'accessory'], false),
-        ('p3', 'Smart Speaker', 'Voice-controlled assistant with clear audio.', 79.99, 'Electronics', ARRAY['https://images.unsplash.com/photo-1589492477829-5e65395b66cc?w=800&q=80'], 30, 4.2, 56, ARRAY['smart-home', 'audio'], true),
-        ('p4', 'Running Shoes', 'Lightweight and durable for all terrains.', 89.00, 'Clothing', ARRAY['https://images.unsplash.com/photo-1542291026-7eec264c27ff?w=800&q=80'], 75, 4.7, 210, ARRAY['sport', 'running', 'fitness'], false)
+        ('p1', 'Premium Handwoven Habesha Kemis', 'An exquisite traditional white dress with beautifully handwoven Tilat pattern borders. Perfect for holidays, weddings, and special cultural occasions.', 180.00, 'Traditional Garments', ARRAY['https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=800&q=80'], 50, 4.9, 124, ARRAY['clothing', 'traditional', 'dress', 'premium'], true),
+        ('p2', 'Authentic Addis Berbere Spice (500g)', 'Sourced directly from the bustling spice stalls of Merkato, this organic Berbere spice blend is made from dried red chilies, fenugreek, garlic, and ginger. Ideal for authentic Doro Wat.', 18.50, 'Spices & Ingredients', ARRAY['https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&q=80'], 150, 4.8, 89, ARRAY['spices', 'cooking', 'organic', 'authentic'], false),
+        ('p3', 'Yirgacheffe Specialty Roasted Coffee (1kg)', 'Medium-roasted highland Arabica beans from the historic Yirgacheffe region. Features dynamic floral notes, citrus undertones, and a remarkably clean body.', 26.90, 'Organic Coffee', ARRAY['https://images.unsplash.com/photo-1447933601403-0c6688de566e?w=800&q=80'], 200, 5.0, 56, ARRAY['coffee', 'beverage', 'roasted', 'yirgacheffe'], true),
+        ('p4', 'Handcrafted Clay Jebena Coffee Pot', 'Authentic traditional clay Ethiopian Jebena pot. Beautifully handcrafted by expert artisans, complete with premium straw ring stand (Mat). Perfect for authentic brewing.', 34.00, 'Cultural Crafts', ARRAY['https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&q=80'], 75, 4.7, 210, ARRAY['craft', 'coffee', 'home', 'artisan'], false)
       `);
     }
 
@@ -167,9 +252,29 @@ async function initializeDatabase() {
     
     console.log("Database initialization completed.");
     isInitialized = true;
-  } catch (err) {
-    if (client) await client.query('ROLLBACK');
+  } catch (err: any) {
+    if (client) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackErr) {
+        // Safe to ignore if connection wasn't even established
+      }
+    }
     console.error("Database initialization error:", err);
+    
+    const errMsg = (err && err.message) ? err.message : String(err);
+    if (
+      errMsg.includes("password authentication failed") ||
+      errMsg.includes("ECIRCUITBREAKER") ||
+      errMsg.includes("circuit breaker") ||
+      (err && err.code === "28P01")
+    ) {
+      isDbConnectionBlocked = true;
+      dbInitError = err;
+      console.error("\n🔴 [DB-FATAL] PostgreSQL / Supabase authentication has failed repeatedly or hit a circuit breaker.");
+      console.error("🔒 [DB-SECURITY] Subsequent query/connection attempts for this server process have been suspended to prevent your database host from blocking your workspace's IP address.");
+      console.error("👉 FIX REQUIRED: Open the Settings panel in the AI Studio sidebar, locate DATABASE_URL, correct the credentials/password, save it, and restart the development server.\n");
+    }
     throw err;
   } finally {
     if (client) client.release();
@@ -182,11 +287,16 @@ let initPromise: Promise<void> | null = null;
 
 async function ensureInitialized() {
   if (isInitialized) return;
+  if (isDbConnectionBlocked) {
+    throw dbInitError || new Error("Database connection is currently blocked due to previous authentication failures.");
+  }
   if (!initPromise) {
     console.log("Initializing database connection...");
     initPromise = initializeDatabase().catch(err => {
       console.error("Database initialization failed:", err);
-      initPromise = null;
+      if (!isDbConnectionBlocked) {
+        initPromise = null;
+      }
       throw err;
     });
   }

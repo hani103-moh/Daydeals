@@ -7,7 +7,6 @@
     "geolocation"
   ],
   "majorCapabilities": [
-    "firebase",
     "motion"
   ]
 }
