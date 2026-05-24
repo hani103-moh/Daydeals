@@ -52,86 +52,100 @@
 
 :root {
     --background: oklch(0.98 0.01 240);
-    --foreground: oklch(0.2 0.02 240);
+    --foreground: oklch(0.18 0.02 240);
     --card: oklch(1 0 0 / 0.7);
-    --card-foreground: oklch(0.2 0.02 240);
+    --card-foreground: oklch(0.18 0.02 240);
     --popover: oklch(1 0 0 / 0.9);
-    --popover-foreground: oklch(0.2 0.02 240);
-    --primary: oklch(0.6 0.15 150); /* Ethiopian Green */
+    --popover-foreground: oklch(0.18 0.02 240);
+    --primary: oklch(0.62 0.16 148); /* Premium Ethiopian Emerald Green */
     --primary-foreground: oklch(0.98 0.01 240);
-    --secondary: oklch(0.85 0.15 80); /* Ethiopian Yellow/Gold */
-    --accent: oklch(0.6 0.2 30); /* Ethiopian Red */
-    --radius: 0.75rem;
+    --secondary: oklch(0.85 0.15 82); /* Ethiopian Radiant Gold */
+    --accent: oklch(0.58 0.22 28); /* Warm Ethiopian Rich Red */
+    --radius: 12px;
 }
 
 .tilet-pattern {
   background-image: repeating-linear-gradient(45deg, var(--primary) 0, var(--primary) 2px, transparent 0, transparent 50%);
   background-size: 10px 10px;
-  opacity: 0.1;
+  opacity: 0.15;
 }
 
 .dark {
-    --background: oklch(0.15 0.02 240);
-    --foreground: oklch(0.95 0.01 240);
-    --card: oklch(0.2 0.03 240 / 0.7);
-    --card-foreground: oklch(0.95 0.01 240);
-    --popover: oklch(0.18 0.03 240 / 0.85);
-    --popover-foreground: oklch(0.95 0.01 240);
-    --primary: oklch(0.65 0.2 260);
-    --primary-foreground: oklch(0.15 0.02 240);
-    --secondary: oklch(0.25 0.04 240);
-    --secondary-foreground: oklch(0.95 0.01 240);
-    --muted: oklch(0.22 0.02 240);
-    --muted-foreground: oklch(0.7 0.02 240);
-    --accent: oklch(0.3 0.1 260 / 0.4);
-    --accent-foreground: oklch(0.8 0.1 260);
-    --destructive: oklch(0.5 0.2 25);
-    --border: oklch(1 0 0 / 10%);
+    --background: oklch(0.12 0.02 240);
+    --foreground: oklch(0.96 0.01 240);
+    --card: oklch(0.16 0.02 240 / 0.7);
+    --card-foreground: oklch(0.96 0.01 240);
+    --popover: oklch(0.15 0.03 240 / 0.9);
+    --popover-foreground: oklch(0.96 0.01 240);
+    --primary: oklch(0.68 0.17 148); /* Rich brighter Emerald in Dark Mode */
+    --primary-foreground: oklch(0.12 0.02 240);
+    --secondary: oklch(0.82 0.14 82); /* Elegant Soft Gold */
+    --accent: oklch(0.58 0.22 28);
+    --muted: oklch(0.18 0.02 240);
+    --muted-foreground: oklch(0.68 0.02 240);
+    --accent-foreground: oklch(0.78 0.11 82);
+    --destructive: oklch(0.52 0.2 25);
+    --border: oklch(1 0 0 / 12%);
     --input: oklch(1 0 0 / 15%);
-    --ring: oklch(0.65 0.2 260 / 0.5);
+    --ring: oklch(0.68 0.17 148 / 0.5);
 }
 
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    @apply border-border outline-ring/50 transition-colors duration-150;
   }
   body {
-    @apply bg-background text-foreground selection:bg-primary/20;
+    @apply bg-background text-foreground selection:bg-primary/20 min-h-screen relative overflow-x-hidden;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+  /* Decorative elegant mesh background pattern */
+  body::before {
+    content: '';
+    position: absolute;
+    width: 600px;
+    height: 600px;
+    top: -300px;
+    right: -200px;
+    border-radius: 50%;
+    background: radial-gradient(circle, var(--primary) 0%, transparent 70%);
+    opacity: 0.1;
+    filter: blur(80px);
+    pointer-events: none;
+    z-index: -10;
   }
 }
 
 .glass {
-  backdrop-filter: blur(12px);
-  background-color: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  @apply dark:bg-black/40 dark:border-white/10 shadow-xl;
+  backdrop-filter: blur(16px);
+  background-color: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  @apply dark:bg-black/45 dark:border-white/12 shadow-xl;
 }
 
 .glass-card {
   backdrop-filter: blur(24px);
-  @apply bg-card border border-white/20 dark:border-white/10 shadow-2xl transition-all duration-300 hover:scale-[1.02] hover:shadow-primary/10;
+  @apply bg-card border border-white/25 dark:border-white/12 shadow-2xl transition-all duration-300 hover:scale-[1.01] hover:shadow-primary/5 hover:border-primary/20;
 }
 
 .mobile-card {
   backdrop-filter: blur(12px);
-  background-color: rgba(255, 255, 255, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  @apply p-2 rounded-xl dark:bg-black/40;
+  background-color: rgba(255, 255, 255, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  @apply p-2 rounded-xl dark:bg-black/45;
 }
 
 .glass-nav {
-  @apply sticky top-0 z-50 backdrop-blur-lg bg-background/60 border-b border-border;
+  @apply sticky top-0 z-50 backdrop-blur-lg bg-background/70 border-b border-border;
 }
 
 .gradient-text {
-  @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-primary/60;
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-primary to-secondary;
 }
 
 @keyframes float {
-  0% { transform: translateY(0px); }
-  50% { transform: translateY(-10px); }
-  100% { transform: translateY(0px); }
+  0% { transform: translateY(0px) scale(1); }
+  50% { transform: translateY(-8s) scale(1.02); }
+  100% { transform: translateY(0px) scale(1); }
 }
 
 .animate-float {

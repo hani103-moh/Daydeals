@@ -165,18 +165,77 @@ const OrdersAdmin = () => {
                     </Badge>
                   </TableCell>
                   <TableCell className="text-right px-6">
-                    <Select value={o.status} onValueChange={(val) => updateStatus(o, val)}>
-                      <SelectTrigger className="w-[140px] h-10 rounded-xl glass border-none font-bold text-xs truncate">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="glass border-border rounded-2xl">
-                        <SelectItem value="pending">Pending</SelectItem>
-                        <SelectItem value="processing">Processing</SelectItem>
-                        <SelectItem value="shipped">Shipped</SelectItem>
-                        <SelectItem value="delivered">Delivered</SelectItem>
-                        <SelectItem value="cancelled">Cancelled</SelectItem>
-                      </SelectContent>
-                    </Select>
+                    <div className="flex items-center justify-end gap-2">
+                      {o.status === 'pending' && (
+                        <>
+                          <button
+                            onClick={() => updateStatus(o, 'processing')}
+                            className="px-3 py-1.5 h-9 rounded-xl bg-blue-500/10 hover:bg-blue-500/20 text-blue-500 font-extrabold text-[9px] uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border border-blue-500/15"
+                          >
+                            Process ⚙️
+                          </button>
+                          <button
+                            onClick={() => updateStatus(o, 'cancelled')}
+                            className="px-3 py-1.5 h-9 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-500 font-extrabold text-[9px] uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border border-red-500/15"
+                          >
+                            Cancel ❌
+                          </button>
+                        </>
+                      )}
+                      {o.status === 'processing' && (
+                        <>
+                          <button
+                            onClick={() => updateStatus(o, 'shipped')}
+                            className="px-3 py-1.5 h-9 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-500 font-extrabold text-[9px] uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border border-purple-500/15 animate-pulse"
+                          >
+                            Ship 🚚
+                          </button>
+                          <button
+                            onClick={() => updateStatus(o, 'cancelled')}
+                            className="px-3 py-1.5 h-9 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-500 font-extrabold text-[9px] uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border border-red-500/15"
+                          >
+                            Cancel ❌
+                          </button>
+                        </>
+                      )}
+                      {o.status === 'shipped' && (
+                        <>
+                          <button
+                            onClick={() => updateStatus(o, 'delivered')}
+                            className="px-3 py-1.5 h-9 rounded-xl bg-green-500/10 hover:bg-green-500/20 text-green-500 font-extrabold text-[9px] uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border border-green-500/15"
+                          >
+                            Deliver 🎉
+                          </button>
+                          <button
+                            onClick={() => updateStatus(o, 'cancelled')}
+                            className="px-3 py-1.5 h-9 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-500 font-extrabold text-[9px] uppercase tracking-wider transition-all flex items-center gap-1 cursor-pointer border border-red-500/15"
+                          >
+                            Cancel ❌
+                          </button>
+                        </>
+                      )}
+                      {o.status === 'delivered' && (
+                        <span className="text-[9px] font-extrabold uppercase tracking-wider text-green-500 bg-green-500/5 px-2.5 py-1.5 rounded-xl border border-green-500/10">Fullfilled ✓</span>
+                      )}
+                      {o.status === 'cancelled' && (
+                        <span className="text-[9px] font-extrabold uppercase tracking-wider text-red-400 bg-red-500/5 px-2.5 py-1.5 rounded-xl border border-red-500/10">Cancelled ❌</span>
+                      )}
+
+                      <span className="opacity-15 font-light text-xs mx-1">|</span>
+
+                      <Select value={o.status} onValueChange={(val) => updateStatus(o, val)}>
+                        <SelectTrigger className="w-[32px] h-8 p-0 border-none rounded-lg text-muted-foreground hover:bg-white/5 flex items-center justify-center shrink-0 focus:ring-0">
+                          <span className="text-sm font-black font-mono leading-none">⋯</span>
+                        </SelectTrigger>
+                        <SelectContent className="glass border-border rounded-xl">
+                          <SelectItem value="pending">Pending</SelectItem>
+                          <SelectItem value="processing">Processing</SelectItem>
+                          <SelectItem value="shipped">Shipped</SelectItem>
+                          <SelectItem value="delivered">Delivered</SelectItem>
+                          <SelectItem value="cancelled">Cancelled</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

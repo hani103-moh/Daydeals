@@ -124,6 +124,43 @@ function getPool() {
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key-for-dev';
 
+async function runSeedingIfEmpty(client: any) {
+  try {
+    const seedCheck = await client.query(`
+      SELECT 
+        (SELECT COUNT(*) FROM categories) as cat_count, 
+        (SELECT COUNT(*) FROM products) as prod_count
+    `);
+    const { cat_count, prod_count } = seedCheck.rows[0];
+
+    if (parseInt(cat_count) === 0) {
+      console.log("[DB SEEDING] Seeding categories...");
+      await client.query(`
+        INSERT INTO categories (id, name, icon, description) VALUES
+        ('c1', 'Traditional Garments', 'Shirt', 'Exquisite Habesha Kemis, Kuta, and modern Ethiopian fusion fashion'),
+        ('c2', 'Spices & Ingredients', 'Sparkles', 'Authentic Berbere, Mitmita, Shiro, and rich local blends'),
+        ('c3', 'Organic Coffee', 'Home', 'Premium, raw, and roasted Ethiopian specialty coffee beans'),
+        ('c4', 'Cultural Crafts', 'Scissors', 'Handmade woven baskets, traditional clay Jebena pots, and cultural art')
+      `);
+    }
+
+    if (parseInt(prod_count) === 0) {
+      console.log("[DB SEEDING] Seeding products...");
+      await client.query(`
+        INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
+        ('p1', 'Premium Handwoven Habesha Kemis', 'An exquisite traditional white dress with beautifully handwoven Tilat pattern borders. Perfect for holidays, weddings, and special cultural occasions.', 180.00, 'Traditional Garments', ARRAY['https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=800&q=80'], 50, 4.9, 124, ARRAY['clothing', 'traditional', 'dress', 'premium'], true),
+        ('p2', 'Authentic Addis Berbere Spice (500g)', 'Sourced directly from the bustling spice stalls of Merkato, this organic Berbere spice blend is made from dried red chilies, fenugreek, garlic, and ginger. Ideal for authentic Doro Wat.', 18.50, 'Spices & Ingredients', ARRAY['https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&q=80'], 150, 4.8, 89, ARRAY['spices', 'cooking', 'organic', 'authentic'], false),
+        ('p3', 'Yirgacheffe Specialty Roasted Coffee (1kg)', 'Medium-roasted highland Arabica beans from the historic Yirgacheffe region. Features dynamic floral notes, citrus undertones, and a remarkably clean body.', 26.90, 'Organic Coffee', ARRAY['https://images.unsplash.com/photo-1447933601403-0c6688de566e?w=800&q=80'], 200, 5.0, 56, ARRAY['coffee', 'beverage', 'roasted', 'yirgacheffe'], true),
+        ('p4', 'Handcrafted Clay Jebena Coffee Pot', 'Authentic traditional clay Ethiopian Jebena pot. Beautifully handcrafted by expert artisans, complete with premium straw ring stand (Mat). Perfect for authentic brewing.', 34.00, 'Cultural Crafts', ARRAY['https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&q=80'], 75, 4.7, 210, ARRAY['craft', 'coffee', 'home', 'artisan'], false)
+      `);
+    }
+
+    await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`).catch(() => {});
+  } catch (err) {
+    console.error("⚠️ [DB SEEDING] Run seeding error, table might not be fully ready yet:", err);
+  }
+}
+
 async function initializeDatabase() {
   if (isDbConnectionBlocked) {
     throw dbInitError || new Error("Database connection is currently blocked due to previous authentication failures.");
@@ -153,6 +190,10 @@ async function initializeDatabase() {
         );
       `);
       console.log("Incremental migrations complete. Database tables verified.");
+      
+      // Ensure seed data exists even if database table pre-exists empty
+      await runSeedingIfEmpty(client);
+
       isInitialized = true;
       return;
     }
@@ -251,32 +292,8 @@ async function initializeDatabase() {
     `);
     
     // SEEDING
-    const seedCheck = await client.query('SELECT (SELECT COUNT(*) FROM categories) as cat_count, (SELECT COUNT(*) FROM products) as prod_count');
-    const { cat_count, prod_count } = seedCheck.rows[0];
+    await runSeedingIfEmpty(client);
 
-    if (parseInt(cat_count) === 0) {
-      console.log("Seeding categories...");
-      await client.query(`
-        INSERT INTO categories (id, name, icon, description) VALUES
-        ('c1', 'Traditional Garments', 'Shirt', 'Exquisite Habesha Kemis, Kuta, and modern Ethiopian fusion fashion'),
-        ('c2', 'Spices & Ingredients', 'Sparkles', 'Authentic Berbere, Mitmita, Shiro, and rich local blends'),
-        ('c3', 'Organic Coffee', 'Home', 'Premium, raw, and roasted Ethiopian specialty coffee beans'),
-        ('c4', 'Cultural Crafts', 'Scissors', 'Handmade woven baskets, traditional clay Jebena pots, and cultural art')
-      `);
-    }
-
-    if (parseInt(prod_count) === 0) {
-      console.log("Seeding products...");
-      await client.query(`
-        INSERT INTO products (id, name, description, price, category, images, stock, rating, reviews_count, tags, is_featured) VALUES
-        ('p1', 'Premium Handwoven Habesha Kemis', 'An exquisite traditional white dress with beautifully handwoven Tilat pattern borders. Perfect for holidays, weddings, and special cultural occasions.', 180.00, 'Traditional Garments', ARRAY['https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=800&q=80'], 50, 4.9, 124, ARRAY['clothing', 'traditional', 'dress', 'premium'], true),
-        ('p2', 'Authentic Addis Berbere Spice (500g)', 'Sourced directly from the bustling spice stalls of Merkato, this organic Berbere spice blend is made from dried red chilies, fenugreek, garlic, and ginger. Ideal for authentic Doro Wat.', 18.50, 'Spices & Ingredients', ARRAY['https://images.unsplash.com/photo-1596040033229-a9821ebd058d?w=800&q=80'], 150, 4.8, 89, ARRAY['spices', 'cooking', 'organic', 'authentic'], false),
-        ('p3', 'Yirgacheffe Specialty Roasted Coffee (1kg)', 'Medium-roasted highland Arabica beans from the historic Yirgacheffe region. Features dynamic floral notes, citrus undertones, and a remarkably clean body.', 26.90, 'Organic Coffee', ARRAY['https://images.unsplash.com/photo-1447933601403-0c6688de566e?w=800&q=80'], 200, 5.0, 56, ARRAY['coffee', 'beverage', 'roasted', 'yirgacheffe'], true),
-        ('p4', 'Handcrafted Clay Jebena Coffee Pot', 'Authentic traditional clay Ethiopian Jebena pot. Beautifully handcrafted by expert artisans, complete with premium straw ring stand (Mat). Perfect for authentic brewing.', 34.00, 'Cultural Crafts', ARRAY['https://images.unsplash.com/photo-1514432324607-a09d9b4aefdd?w=800&q=80'], 75, 4.7, 210, ARRAY['craft', 'coffee', 'home', 'artisan'], false)
-      `);
-    }
-
-    await client.query(`UPDATE users SET role = 'admin' WHERE email = 'hanichomoh@gmail.com'`);
     await client.query('COMMIT');
     
     console.log("Database initialization completed.");
@@ -1170,6 +1187,15 @@ app.delete("/api/orders/:id", authenticateToken, async (req: any, res: any) => {
     }
     
     const cancelledOrder = result.rows[0];
+    
+    // Send automatic simulation email to the customer on cancellation
+    sendEmailNotification(
+      cancelledOrder.user_id, 
+      orderId, 
+      "Order Cancelled ❌", 
+      `Your order ${orderId} has been successfully cancelled.\n\nIf you did not request this cancellation or have any questions, please contact our support desk immediately.`
+    );
+
     sendTelegramNotification({
       orderId, 
       total: Number(cancelledOrder.total), 
